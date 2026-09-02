@@ -1,0 +1,18 @@
+{
+  "model": "Llama-3.2-1B (ModelScope LLM-Research mirror)",
+  "method": "recursive 2-means (cosine) bisection of tied embedding table",
+  "M": 17,
+  "seed": 42,
+  "vocab": 128256,
+  "build_stats": {
+    "early_singleton": 128256,
+    "max_depth_hit": 0,
+    "fallback_splits": 0
+  },
+  "validation": {
+    "corr_tree": 0.041447457641662855,
+    "corr_random": 0.003226333368874581,
+    "nn_hamming_tree": 7.508,
+    "nn_hamming_random": 8.42
+  }
+}

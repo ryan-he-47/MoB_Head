@@ -1,0 +1,59 @@
+# AGENTS.md
+
+## Project status
+
+Research repo. **Project name: MoB_Head (renamed from llm_codec 2026-09-02; GitHub private repo: https://github.com/ryan-he-47/MoB_Head.git — push code+docs+codebook only, never weights/caches/runs, per .gitignore).** Project: distill an LLM's unembedding (de-embedding) layer into a compact Mixture Density Network (MDN) head to eliminate the h×V matmul and V-dim softmax bottleneck for on-device small models.
+
+Core design (agreed with the user; decisions logged in `docs/03-experiment-plan.md` §8):
+- Each vocab token maps to a binary code of M = ceil(log2(V)) bits → vertices of the M-dim unit hypercube (Llama-3.2-1B: V=128256, M=17, 2816 unused vertices).
+- Codes are assigned by a **semantic binary tree**: M-level tree over the tied embedding table (2-means direction + median-balanced split; plain 2-means bisection provably fails on cone-shaped LLM embeddings — see `docs/04-p0-report.md` §3.1), so nearby vertices are semantically close. Built codebook: `data/codebook.npz` (all 128256 codes unique; top-40 target sets 35% more compact than random codes).
+- **Head (mainline, user decision 2026-08-31): Mixture of 32 factorized Bernoullis (MoB)** over the M-bit code — 3-layer MLP (width 1.2× hidden, SiLU like the base LLM) → 32×17 bit-logits + 32 π-logits. GMM head (32-component spherical, noise-continuized targets) is the fallback/P4 comparison; its stability recipe lives in `docs/01-survey-gmm-stability.md`.
+- Training: freeze the backbone; distill on **BabyLM 2023** (GitHub zip; user notes BabyLM is not sacred — chosen for small size, swappable if results disappoint). Loss = exact teacher-probability-weighted NLL over the teacher's **top-1024** next-token distribution (no sampling, no noise). MoB stability controls: k-means-vertex init of bit-logits, π entropy regularization, DAEM temperature annealing 2→1, fp32 log-space loss.
+- Decoding: temperature-pick a component by weight, round its per-bit probabilities → vertex → token id (fallback: nearest valid vertex). No h×V matmul, no V-length softmax.
+- Milestone: frozen backbone + distilled head generates semantically correct sentences; acceptance = **normalized PPL vs native head (same backbone, babylm_dev) + human generation check**.
+- ECC (Hamming-style error-correcting code bits) proposed by user as bit-flip countermeasure; user confirmed 2026-08-31: **not in mainline** (17-bit pure tree codes), deferred to P4 ablation.
+
+## Hard constraints (violations are blocking)
+
+- **The user has final say on every technical decision.** Do not unilaterally change architecture, hyperparameters, datasets, or training procedure. Ask via the `question` tool when a decision point is reached; present options with effort estimates and a recommendation.
+- **The user acts as a resource-collection agent.** If you need something you cannot fetch yourself (model weights, datasets, packages, repos), instruct the user to download it rather than working around its absence.
+- **HPC etiquette:** cluster jobs run through **slurm**. NEVER run anything compute-heavy on a login node.
+- Local GPU is an RTX 4060 Laptop (8 GB) — prototypes must fit in 8 GB. Heavy training goes to the cloud queue.
+
+## Environment
+
+- Local torch env: conda env `cose2` (`E:\MiniConda\envs\cose2\python.exe` — conda is not on PATH; invoke the env python directly).
+- Cloud (school HPC, slurm): V100 32 GB (plentiful), A100 80 GB (usually queued).
+- Target model: Llama 3.2 1B, local copy at `LLM-Research--Llama-3.2-1B\snapshots\master` (ModelScope mirror; HF is gated and the user's application was declined). Verified: params 1,235,814,400, tied embeddings, `hidden_states[-1]` is exactly the lm_head input (the MDN head taps there).
+- Dataset: BabyLM 2023, extracted at `data\babylm_data\` (babylm_10M / babylm_100M / dev / test).
+- Teacher distribution on BabyLM is diffuse: top-40 covers only ~78% mass (top-1024 ≈ 95%). Distillation top-k is a live decision — see `docs/04-p0-report.md` §5.
+
+## Research directions already assigned
+
+- Survey standard fixes for GMM numerical instability and mode collapse (component-weight shrinkage) and adapt them to this data regime: hypercube vertices + noise point cloud. Design a numerically stable MDN formulation before writing training code. (Done — archived in `docs/01`.)
+
+## Current state (2026-08-31)
+
+- Literature surveys done and archived: `docs/01-survey-gmm-stability.md`, `docs/02-survey-output-layer-prior-art.md`.
+- Experiment plan + decision log: `docs/03-experiment-plan.md`. P0 report: `docs/04-p0-report.md` (codebook built + validated). P1 report: `docs/05-p1-report.md` (smoke test passed: NLL 10.24→3.86 nats, 27.6/32 effective components, 0 dead, decode==teacher-top1 72.8% on the overfit set).
+- Project is **P2 COMPLETE**: full distillation 10M x 3 epochs done locally (main run + warm-start recovery after an auto-sleep kill at step 7800/11118). Final acceptance eval: **MoB/native PPL = 2.13x** (119.1 vs 56.0), dev top-1 agreement 0.540, greedy generations grammatical but drifting (~10 tokens) - milestone NOT yet met. Full analysis + gap decomposition (median gap ~0; gap concentrated in diffuse/multi-modal positions) in `docs/07-p2-report.md` §8.
+- **Cluster ready (2026-09-01): burgundy.hpc.cityu.edu.hk:22 (key auth), home /gpfs1/home/yihe47, conda cose2 at /home/yihe47/miniconda3/envs/cose2 (torch 2.5.1+cu121 V100-native).** Login node = instant read-only commands only; everything else via sbatch. Setup job done (weights via ModelScope + FineWeb-Edu caches: 1B tokens train / 2000-doc dev). Verification job on gpu_v100s PASSED (1024 steps, 0.36s/step measured, full chain incl. eval). Cluster runbook with the full execution record: `docs/06-p2-runbook.md` §8.
+- **B+A long run SUBMITTED (2026-09-01, user-chosen option A): job 519759 on gpu_v100s — FineWeb-Edu 1B-token cache x 1 epoch (~245k steps, ~24.5h), K=128/width 3072, fp16 backbone, head_latest.pt every 20k steps.** Training confirmed healthy at scale (step 600, NLL 5.02). On completion: p3_eval auto-runs (64 chunks, fineweb dev); pull results back and write docs/08-p3-report.md.
+- **Monitoring handed to the user (2026-09-01, user request: "我盯不消耗token").** Training declared on-track at step 5400/245k (NLL 10.61→4.19 smooth, panel at 5k: agree 0.569, n_eff 69.1/128, 0 dead). User watches with squeue + tail on runs/p2_fineweb_full/train_log.jsonl. Agent resumes on completion or when pinged: pull runs/p2_fineweb_full/ + runs/p3_fineweb_full_eval/ back, write docs/09-p3-report.md with acceptance analysis. Note: --ckpt-every path first fires at step 20000 (only new code path in this run); if it crashed there, resume from head_latest.pt.
+- **Mid-run analysis (2026-09-01, user asked "loss decreases slowly")**: verdict NORMAL — distillation loss floor = teacher entropy ≈ 2.5 nats (native fineweb dev NLL 2.54); LR still at 94% peak at step 41k/245k (cosine schedule; decisive gains come in the decay tail); high-LR plateau (dev_nll ~4.0, agree 0.59-0.60) expected. Mid-run normalized PPL at step 40k: **MoB/native = 4.45×** (56.4 vs 12.7, fineweb in-domain dev; was 7.86× at 1024-step verification). n_eff ~85/128, dead=0 throughout. Only thing to watch: LR-decay-tail climb in agreement/dev_nll; if final agreement < ~0.65 and PPL ratio > 3×, capacity/width becomes the suspect for a rerun.
+- **Step-154k pulse (2026-09-01, user asked):** decay phase delivering as predicted — dev_nll 4.00→3.73 (43k→151k), agree 0.597→0.637 climbing; normalized PPL ratio 3.62× (trajectory 7.86→4.45→3.62). Projection: final agree ~0.65-0.70, ratio ~2.5-3×, near but above the capacity-suspect threshold. Final verdict at completion.
+- **Step-194k pulse (2026-09-01):** dev_nll 3.65, agree 0.655; normalized PPL 3.37× at ~step 194k. Schedule analysis: cosine 2e-3 was inefficiently (not destructively) high for this init+floor regime; user-decided WSD variant (job 520825: peak 7e-4, warmup 2500, decay last 35%) running in parallel — early convergence ~15-20x faster than cosine at matched steps.
+- **Checkpoint mechanism upgraded + verified (2026-09-02, user question):** archived full-state checkpoints every `--ckpt-every` steps (`head_stepN.pt`: head+optimizer+step+data order), rotated with `--ckpt-keep 3`; `--resume <head_stepN.pt>` does a TRUE breakpoint resume (verified: resume from step-49 reproduces the original run's endpoint metrics exactly). head_latest.pt stays weights-only for eval scripts. Uploaded to cluster; affects future submissions only (in-flight runs loaded the old copy).
+- **Schedule analysis (2026-09-01, user insight: slow-early/fast-late = LR too high?):** verdict — not destructively too high (no spikes/NaN/dead, probes at same peak converged fine) but inefficiently high given k-means-vertex init + high entropy floor (plateau churn at high LR; gains started when LR < ~7e-4). No permanent damage from prolonged high LR (decay tail converges steadily). User decision: launch a schedule variant in parallel — **job 520825 on gpu_v100s-03: peak 7e-4 (=1/3), warmup 2500 (1%), WSD with linear decay over last 35%**, same data/head, ~24.5h. WSD support added to `scripts/p2_train.py` (`--schedule wsd --decay-frac`); verified locally (LR shape + NLL spike in dry-run was schedule-compression artifact). Head-to-head vs job 519759 at completion: `docs/09-p3-report.md`.
+- **Inference benchmark done (2026-09-01, user request): `docs/08-inference-benchmark.md`.** Head-only: bandwidth 501→71/123 MiB/step, FLOPs 14x/8x fewer, CPU 11.3x faster; end-to-end on the 4060: +11% tok/s; batch-256 head speedup 3.8x. On-device value is real; fidelity gap closure depends on the cluster B+A run.
+- **Encoder-side line TERMINATED (2026-09-01, user decision): `docs/10-encoder-mlp.md`.** MLP-from-code embedding replacement is infeasible (memorization ratio + structure limits; plug-in PPL 1810x worse; width doesn't help). Project scope is decoder-only; industry embedding-offloading covers the encoder side.
+- P2 scripts: production distillation `scripts/p2_train.py` (supports `--k/--width/--backbone-dtype/--loss-chunk`); acceptance eval `scripts/p3_eval.py`; shared head/loss/decode `scripts/mob_common.py`; slurm template `scripts/p2_train.sbatch` (FILL_ME placeholders) + `requirements-cluster.txt`.
+- Reference scripts in `scripts/`: smoke_test.py, measure_coverage.py, build_codebook.py, measure_code_compactness.py, p1_smoke.py.
+- Docs index: plans, reports, and design docs all live in `docs/` as Markdown. **Entry points for a new session: methodology `docs/11-design-methodology.md`, code architecture `docs/13-code-architecture.md`, experiment log `docs/12-experiment-log.md`; open-source-style overview at repo root `README.md`.**
+
+## Conventions
+
+- Ask the user about anything unclear in definitions or direction instead of guessing.
+- All plans, reports, and design/construction docs are archived as Markdown files in `docs/` (single shared folder, e.g. `docs/01-experiment-plan.md`).
+- **Docs-first rule: before ANY development work, read the relevant docs/ first (methodology `docs/11`, code architecture `docs/13`, current state in AGENTS.md). When any development work is completed, the wrap-up MUST update or add docs/ entries.**
+- This file is the only instruction source; keep it updated as decisions are made.

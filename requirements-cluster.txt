@@ -1,0 +1,17 @@
+# Cluster environment for P2/P3 (school HPC, V100 32GB).
+# Reference: local cose2 env versions below. Torch MUST match the cluster's CUDA
+# driver/toolkit — do not copy the local cu130 build blindly; pick the wheel the
+# cluster supports (V100 = sm_70, any recent cu11x/cu12x build works).
+#
+# Local (cose2) verified versions, for reference:
+#   torch 2.11.0+cu130
+#   transformers 5.16.1
+#   numpy 2.4.3
+#   safetensors (bundled with transformers dependency chain)
+#   accelerate 1.14.0 (not strictly required by p2_train.py/p3_eval.py)
+
+torch>=2.4          # match cluster CUDA; needs bf16 + CUDA for V100
+transformers==5.16.1
+numpy>=2.0
+safetensors>=0.4
+datasets>=5.0       # FineWeb-Edu data path (streaming / HF cache)

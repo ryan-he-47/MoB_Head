@@ -1,0 +1,103 @@
+# 代码架构与运行机制
+
+日期：2026-09-02 · 读者：接手开发的新 agent（含上下文清空/换 harness 的场景）· 性质：施工级细节文档，写到一个新人能直接改代码的程度
+
+## 0. 仓库布局
+
+```
+llm_codec/
+├── LLM-Research--Llama-3.2-1B/snapshots/master/   # 冻结骨干（魔搭镜像，bf16 safetensors 2.47GB + tokenizer）
+├── data/
+│   ├── codebook.npz / codebook_meta.json          # 语义二叉树码本 + 元数据
+│   ├── babylm_data/                               # BabyLM 2023 原始文本（10M/100M/dev/test）
+│   ├── *_tokens.npy                               # int32 token 缓存（babylm_10m / babylm_dev / fineweb_*）
+├── scripts/                                       # 全部代码（无包结构，脚本间用同目录 import）
+├── runs/                                          # 训练/评测产物（checkpoint、train_log.jsonl、metrics）
+├── docs/                                          # 全部文档（编号递进）
+└── AGENTS.md                                      # 项目级指令源
+```
+
+本地环境：conda env `cose2`（`E:\MiniConda\envs\cose2\python.exe`，conda 不在 PATH 上，直接调 env 内 python）。集群：burgundy.hpc.cityu.edu.hk:22，远端根目录 `/gpfs1/home/yihe47/llm_codec`，python 在 `/home/yihe47/miniconda3/envs/cose2/bin/python`。
+
+## 1. 核心库：`scripts/mob_common.py`
+
+共享的 MoB 头定义与全部数值核心。常量 `H=2048, WIDTH=2458, K=32, M=17`（M 永远 17；K/WIDTH 是旧默认——新代码一律走构造参数）。
+
+- `MoBHead(k=K, width=WIDTH)`：`trunk = 3×(Linear→SiLU)`（H→width→width→width），`out = Linear(width, k*M + k)`，out 权重 `N(0, 1e-3)` 初始化（配合 bias 注入做顶点 init）。forward 返回 `(bit_logits [n,k,M], pi_logits [n,k])`。**改容量就改这两个参数，checkpoint 不跨配置兼容**（评测脚本要带匹配的 `--k/--width`）。
+- `mob_mix_logprob(bit_logits, log_pi, codes) -> [n,k]`：对数混合概率。核心恒等式 `log Bern(c;z) = c·z + logsigmoid(−z)`（z 是 bit-logit）——免 exp、免溢出；`einsum("nkm,njm->nkj", codes, bit_logits)` + `logsigmoid(−z).sum(M)` 得分量对数概率，再 `logsumexp(log_pi + comp, dim=K)`。**全部 fp32，别放进 autocast**。
+- `decode_greedy(bit_logits, log_pi, vid_to_tok, codes_all) -> token ids`：argmax π → 逐位取整 → 打包顶点 id → `vid_to_tok` 查表；落空（2816 个空余顶点之一）时对该位置做全表 Hamming 最近邻（`codes_all != bits` 求和取 argmin）。
+
+## 2. 生产训练：`scripts/p2_train.py`
+
+### 数据流
+```
+文本 → tokenizer → int32 token 缓存（.npy，一次性构建）
+→ np.lib.stride_tricks.as_strided 切出 [n_chunks, T+1] 视图（stride=T，相邻块重叠 1 token 供 shift）
+→ 每步取 batch 块（默认 8×512）→ 冻结骨干前向（fp16/bf16）
+→ h = hidden_states[-1]（即 lm_head 原输入，已验证逐项相等）+ logits topk(1024) → 权重 = softmax(top-k logits)（top-k 内重归一）
+→ MoB 头 fp32 前向 + 加权 NLL（按 --loss-chunk 分块防显存爆）→ 反传只进头
+```
+
+### 关键机制（都是踩过坑后定型的）
+- **顶部初始化**：`kmeans_vertex_init`——按目标分布多项式采样 2 万个目标顶点 → torch k-means（kmeans++ 式起始 + 30 轮 Lloyd）→ 中心取整为顶点 → bit-logits ±`--init-c 4` 写进 `out.bias`（out 权重近零 → 初始输出≈bias，与 h 无关）。
+- **熵正则**：`+λ·Σπ log π`（λ=`--lambda-ent 0.01`），拉平 π 防权重萎缩。
+- **DAEM**：`log_pi = log_softmax(pi_logits / T)`，T 从 `--daem-t0 2.0` 线性降到 1.0，占前 `--daem-frac 0.10` 总步数。
+- **日程** `--schedule`：`cosine`（200 warmup + 余弦到 0.1×peak）或 `wsd`（warmup → 平台 → 末 `--decay-frac 0.35` 线性降到 0.1×peak）。峰值 `--lr`，warmup 步数 `--warmup`。
+- **日志**：`runs/<outdir>/train_log.jsonl` 每 `--log-every 200` 步一条（step/lr/nll/ent/T/elapsed_s），每 `--panel-every 1000` 步一条 dev 面板（n_eff/dead/dev_top1_agree/dev_nll）。
+- **checkpoint**（2026-09-02 强化，实测验证）：每 epoch 末存 `head_epochN.pt`（永久）；`--ckpt-every N` 周期存**全状态归档** `head_stepN.pt`（head + 优化器 + 全局步数 + 当前 epoch 数据顺序），按 `--ckpt-keep 3` 轮转保留最近 3 份，另存一份权重版 `head_latest.pt` 供评测脚本直接用。
+- **断点续跑（真·resume）**：`--resume <head_stepN.pt>` 恢复 head+优化器+步数+数据顺序，从断点精确继续（LR 日程按全局步数无缝衔接；实测：step-49 恢复后 epoch 终点指标与原跑逐项相同）。旧格式（纯权重 state_dict）仍可 `--resume`，退化为热启动（日程重来，需手动对齐 `--lr/--epochs`）。注意：真续跑须用相同的 `--epochs/--seq-len/--batch`（总步数决定日程）。K=128 头单份全状态 checkpoint 约 390MB（权重 129MB + 优化器 258MB），3 份归档约 1.2GB。
+- **显存公式**（K=128 为例）：损失分块 [loss_chunk, topk, K] fp32 每块 ~loss_chunk×topk×K×4B ×~2（term+comp），骨干 logits batch×512×V×2B。8GB 卡用 `--loss-chunk 1024`；V100 32GB 用 2048-4096。
+
+### 完整 CLI（默认值即 BabyLM 时代基线）
+`--data-root --model-dir --outdir --seq-len 512 --batch 8 --epochs 3 --lr 2e-3 --warmup 200 --schedule cosine --decay-frac 0.35 --topk 1024 --k 32 --width 2458 --lambda-ent 0.01 --daem-t0 2.0 --daem-frac 0.10 --init-c 4.0 --loss-chunk 4096 --log-every 200 --panel-every 1000 --ckpt-every 0 --seed 42 --max-chunks 0（调试截断） --backbone-dtype bfloat16 --resume --data-format babylm|hf --hf-dataset HuggingFaceFW/fineweb-edu --hf-config sample-10BT --hf-split train --hf-field text --hf-max-docs 0 --dev-format babylm|hf --hf-dev-docs 2000 --hf-skip-docs 0 --token-cache`
+
+HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼接 + int32 缓存；`--hf-skip-docs N` 跳过流前 N 篇（训练集）；`--dev-format hf` 时 dev = 流的前 `--hf-dev-docs` 篇（缓存 `fineweb_dev_tokens.npy`）——**二者错开无泄漏**。计算节点无外网时：登录节点预下载 HF 数据集，作业内 `HF_HUB_OFFLINE=1`。
+
+## 3. 验收评测：`scripts/p3_eval.py`
+
+- **归一化 PPL**：p(t) = exp(mix_logprob(c_t) − logZ)，logZ = 对全部 128256 个合法顶点求 mix_logprob 的 logsumexp（按 `--pos-chunk 64` 分块，[64, V, K] 张量）。native 侧 = 标准 CE（同位置同骨干）。
+- 还输出：top-1 一致率、生成样本（贪心 + τ=0.7/1.0 + 教师贪心对照）→ `generations.txt`。
+- 关键参数：`--head <ckpt> --k --width --token-cache <dev 缓存路径> --n-chunks 64 --batch 4 --backbone-dtype`。
+
+## 4. 分析与工具脚本
+
+| 脚本 | 作用 |
+|---|---|
+| `smoke_test.py` | 加载验证：tied 确认、hidden_states[-1]==lm_head 输入、显存画像 |
+| `measure_coverage.py` | 教师 top-k 质量覆盖率曲线（k=40..1024）——定 top-k 的依据 |
+| `build_codebook.py` | 语义二叉树构建（2-means 方向 + 中位数平衡切分）+ 验证 |
+| `measure_code_compactness.py` | 码本操作性验证（目标集紧致度 vs 随机对照） |
+| `p1_smoke.py` | 早期过拟合冒烟（自包含，已被 p2_train 取代为新代码源） |
+| `analyze_gap.py` | PPL 差距分解（按教师熵分位/真值排名分桶）→ `runs/gap_analysis.json` |
+| `benchmark_decode.py` | 推理基准：头部延迟 GPU/CPU、端到端解码 tok/s、带宽/FLOPs 解析表 |
+| `gen_samples.py` | 批量生成展示样本（MoB vs 教师并排） |
+| `build_fineweb_cache.py` | 集群用 CPU 版 FineWeb-Edu 缓存构建（无 GPU 依赖） |
+| `train_encoder.py` | 已终止的编码器实验（负结果，docs/10） |
+
+## 5. 集群作业脚本与运维
+
+- `slurm_setup.sbatch`：一次性搭建（pip 装包 + ModelScope 权重 + FineWeb-Edu 缓存）。**分区用 tiny**（batch 分区有最小资源门槛，小 CPU 作业会被拒）。
+- `slurm_train_fwe.sbatch`：1024 步验证跑（已过）；`slurm_train_fwe_long.sbatch`：余弦 2e-3 长训；`slurm_train_fwe_wsd.sbatch`：WSD 7e-4 变体。三者都在 gpu_v100s（V100S-32GB，5 天时限）。
+- **V100 必须 `--backbone-dtype float16`**（Volta 无 bf16 tensor core）；本地 4060 用默认 bf16。
+- 日常运维（登录节点秒级只读）：`squeue -u yihe47`；`tail runs/<run>/train_log.jsonl`；`scp -P 22 yihe47@burgundy...:<remote> <local>` 拉回产物。
+
+## 6. 已知坑（全是用事故换来的）
+
+1. **PowerShell 写中文文件**：`Set-Content` 会把 UTF-8 中文写坏——用编辑器/write 工具，别用 PS 重定向。
+2. **GBK 控制台**：打印含非 ASCII 的文本会 `UnicodeEncodeError`——脚本里 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`，且先写文件后打印。
+3. **transformers 5.x 的 `device_map="cuda"` 需要 accelerate**——集群没装；全部改用手动 `.cuda()`。
+4. **cross_entropy 的 target 必须 int64**：token chunk 从 numpy int32 来，统一 `.long()`。
+5. **torch 生成器分设备**：CUDA 张量的 multinomial 不能用 CPU generator（`kmeans_vertex_init` 的教训）。
+6. **后台启动的工具假象**：本地 `Start-Process` 会报 "ChildProcess.kill" 但进程其实起来了——用日志+`Get-Process`+`nvidia-smi` 验证，别重发。
+7. **缓冲不可见**：后台进程 stdout 到文件是块缓冲——训练日志以 `train_log.jsonl`（逐条 flush）为准；一次性脚本加 `PYTHONUNBUFFERED=1`。
+8. **CPU 时间≠墙钟**：GPU 自旋线程让进程 CPU 时间 ≈1.24× 墙钟，日志记录看起来"迟到"实为正常。
+9. **2-means 直接二分在窄锥嵌入上退化**：必须用"方向+中位数平衡切分"（docs/04 §3.1）。
+10. **--max-chunks 小于 4×batch 时 warm-up 初始化会切出空批次**：已修（`warm_n` 守卫），改这块代码时注意保持。
+
+## 7. 扩展指引
+
+- **换容量**：`--k/--width`（+ 评测脚本同步）；K=128 时 n_eff 只有 ~74-89，提示分量数可能偏多，升 K 前先看 n_eff。
+- **换数据**：`--data-format hf --hf-dataset ...`（或写好新的文本目录 loader）；dev 集用 `--dev-format` 对齐分布。
+- **换日程**：`--schedule/--lr/--warmup/--decay-frac`；新形状先在本地 `--max-chunks 256 --log-every 1` 干跑看 lr 序列再上集群。
+- **换骨干**：改 `mob_common.py` 的 `H`、码本需重建（嵌入表变了）、`--backbone-dtype` 按硬件选。
+- **恢复中断**：`--resume <ckpt>`（仅权重）+ 手动对齐 `--epochs/--lr`；集群作业务必带 `--ckpt-every`。
