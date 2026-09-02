@@ -45,6 +45,7 @@ def main():
 
     rank_gt, rank_nat, mnll, nnll = [], [], [], []
     cov_nat8, mass_nat8, rerank_hit = [], [], []
+    hit_any8, hit_any4, top1_in = [], [], []
     V = codes_all.shape[0]
     with torch.no_grad():
         for i in range(0, n_chunks, args.batch):
@@ -80,6 +81,11 @@ def main():
                 cov_nat8.append(hits8.float().mean(-1).cpu())
                 p8 = nat_p8[s:s + args.pos_chunk]
                 mass_nat8.append(((hits8 * p8).sum(-1) / p8.sum(-1).clamp_min(1e-30)).cpu())
+                # hit-rate: MoB top-32 catches >=1 of the native top-M (M=4,8);
+                # key question: on top-1-miss positions, does the set still catch a native top-M token
+                hit_any8.append(hits8.any(-1).cpu())
+                hit_any4.append(hits8[:, :4].any(-1).cpu())   # topk is sorted: first 4 = top-4
+                top1_in.append((cand32 == nat_top1[s:s + args.pos_chunk].unsqueeze(1)).any(-1).cpu())
                 # task 3: cascade rerank — native logits rescored on the 32
                 # candidates; agreement == native top-1 in cand32 by construction
                 pick = cand32.gather(1, logits_flat[s:s + args.pos_chunk]
@@ -99,6 +105,15 @@ def main():
         "coverage_native_top8_by_mob_top32": float(cov.mean()),
         "coverage_native_top8_mean_count_of_8": float(cov.mean() * 8),
         "coverage_native_top8_mass_by_mob_top32": float(torch.cat(mass_nat8).mean().item()),
+        "hitrate_mob_top32_catches_native": {
+            "top8": float(torch.cat(hit_any8).float().mean().item()),
+            "top4": float(torch.cat(hit_any4).float().mean().item()),
+        },
+        "top1_miss_analysis": {
+            "n_miss": int((~torch.cat(top1_in)).sum().item()),
+            "hit_native_top8_on_miss": float(torch.cat(hit_any8)[~torch.cat(top1_in)].float().mean().item()),
+            "hit_native_top4_on_miss": float(torch.cat(hit_any4)[~torch.cat(top1_in)].float().mean().item()),
+        },
         "rerank_top1_agreement_vs_native": float(torch.cat(rerank_hit).float().mean().item()),
         "mob_head": {"nll": mob_nll, "ppl": float(np.exp(mob_nll))},
         "native_head": {"nll": nat_nll, "ppl": float(np.exp(nat_nll))},

@@ -26,7 +26,7 @@
 | 09-02 | WSD 在训头测试（step-100k）：效率 + 语义 | 效率：加宽头 CPU 单步 6.2×、e2e ≈持平；语义：PPL 2.585×（未衰减已超余弦终点）、top-32 召回 78.4%/93.9% | docs/08 §5, 09 §6 |
 | 09-02 | **决策：混合概率全顶点排名解码（mixture-argmax）并进主线** | **已实施**（mob_common.decode_mixture_argmax；p3_eval --decode 开关） | docs/09 §6.1, 11 §10 |
 | 09-02 | 解码三路径实测（同一 WSD step-100k 头）：round 0.717 / mixture 0.745 / **级联重排 0.922**（vs native top-1） | 级联=DeepSeek 方案，评估成立，边界已记录，待用户拍板是否入主线 | docs/09 §6.1 |
-| 09-02 | MoB top-32 对原生 top-8 覆盖率：集合 82.0%、质量加权 91.0% | 漏召集中在低质量尾部 | runs/wsd_semantic_eval.json |
+| 09-02 | MoB top-32 对原生 top-8 覆盖率：集合 82.0%、质量加权 91.0%；命中率（≥1 命中）top-8 99.7% / top-4 99.2%；top-1 例外位置 95.1% 仍命中原生 top-8 | 例外优雅降级为原生 2~8 名，级联失败模式温和 | runs/wsd_semantic_eval.json |
 
 ## 关键决策记录（谁在何时拍板）
 
