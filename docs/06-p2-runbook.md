@@ -46,7 +46,9 @@ sbatch scripts/p2_train.sbatch    # 填好 FILL_ME 后
 
 ## 5. 拿回结果
 
-把 `runs/` 下对应目录（train_log.jsonl、checkpoint、p3_metrics.json、generations.txt）拉回本地即可，我来做分析报告（落档 docs/08）和验收判定。
+把 `runs/` 下对应目录（train_log.jsonl、checkpoint、p3_metrics.json、generations.txt）拉回本地即可，我来做分析报告（落档 docs/09）和验收判定。
+
+**代码同步通道（2026-09-02 起）**：项目已推送到私有仓库 `github.com/ryan-he-47/MoB_Head`（仅代码+文档+码本；权重/缓存/runs 由 .gitignore 排除）。集群已连通 GitHub——后续代码更新走"本地 push → 集群 `git pull`"，不必再 scp。注意：仓库含 `data/codebook.npz`，集群 clone 即可得码本。
 
 ## 6. 预期参照（本地实测）
 
