@@ -105,13 +105,24 @@ def decode_mixture_argmax(bit_logits, log_pi, codes_all):
     return mixture_vertex_logprob(bit_logits, log_pi, codes_all).argmax(-1)
 
 
-def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32):
+def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
+                         proposal="mixture", vid_to_tok=None):
     """Cascade decode (mainline-adopted 2026-09-02, docs/09 section 6.1): MoB
-    mixture proposes top-n candidate tokens (exact bound-pruned ranking), then
-    exact native logits h @ E[cand]^T rescore them (reads topn x H rows of the
-    tied embedding table, ~131 KB at topn=32 — no full-V matmul). Top-1
-    agreement ceiling = MoB top-n recall of native top-1 (measured 93.9%).
-    E [V,H] any dtype, h [n,H]. Returns [n] long."""
+    proposes top-n candidate tokens, then exact native logits h @ E[cand]^T
+    rescore them (reads topn x H rows of the tied embedding table, ~131 KB at
+    topn=32 — no full-V matmul). proposal="mixture": exact bound-pruned ranking
+    (top-1 agreement 92.2%); proposal="round": round the top-n components by pi
+    to their vertices — zero GEMM, ~free (agreement 89.9%, docs/09 section 6.1;
+    needs vid_to_tok, n==1 only). E [V,H] any dtype, h [n,H]. Returns [n] long."""
+    if proposal == "round":
+        assert bit_logits.shape[0] == 1 and vid_to_tok is not None
+        ktop = log_pi[0].topk(min(topn, bit_logits.shape[1])).indices      # [n32]
+        bits = (bit_logits[0][ktop] > 0).long()                            # [n32,M]
+        shifts = (1 << torch.arange(M - 1, -1, -1, device=bits.device)).long()
+        cand = vid_to_tok[(bits * shifts).sum(-1)]
+        cand = cand[cand >= 0].unique()                                    # dedup, drop invalid
+        scores = h[0].to(E.dtype) @ E[cand].T                              # [<=n32]
+        return cand[scores.argmax()].view(1)
     if bit_logits.shape[0] == 1:
         cand = mixture_topk(bit_logits, log_pi, codes_all, topn).unsqueeze(0)
     else:

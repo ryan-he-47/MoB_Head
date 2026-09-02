@@ -37,6 +37,9 @@ def main():
     head.eval()
     cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()  # [V,17]
+    vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
+    vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
+        torch.arange(len(cb["vertex_id"]), device="cuda")
 
     dev = np.load(os.path.join(args.data_root, "data", "fineweb_dev_tokens.npy"))
     T = 512
@@ -46,6 +49,7 @@ def main():
     rank_gt, rank_nat, mnll, nnll = [], [], [], []
     cov_nat8, mass_nat8, rerank_hit = [], [], []
     hit_any8, hit_any4, top1_in = [], [], []
+    rr_recall, rr_hit8, rr_hit4, rr_agree, mass32 = [], [], [], [], []
     V = codes_all.shape[0]
     with torch.no_grad():
         for i in range(0, n_chunks, args.batch):
@@ -91,6 +95,26 @@ def main():
                 pick = cand32.gather(1, logits_flat[s:s + args.pos_chunk]
                                      .gather(1, cand32).argmax(-1, keepdim=True)).squeeze(-1)
                 rerank_hit.append((pick == nat_top1[s:s + args.pos_chunk]).cpu())
+                # cascade-32 context: how much native probability mass the set carries
+                cl = logits_flat[s:s + args.pos_chunk].gather(1, cand32)         # [pc,32]
+                mass32.append((torch.logsumexp(cl, -1)
+                               - torch.logsumexp(logits_flat[s:s + args.pos_chunk], -1)).exp().cpu())
+                # round-proposal set (user question): top-32 components by pi, rounded
+                # per-bit — zero GEMM. Good enough as the cascade proposal?
+                bl_c = bl[s:s + args.pos_chunk]
+                ktop = log_pi[s:s + args.pos_chunk].topk(32, -1).indices         # [pc,32]
+                bits_c = bl_c.gather(1, ktop.unsqueeze(-1).expand(-1, -1, M)) > 0
+                shifts = (1 << torch.arange(M - 1, -1, -1, device="cuda")).long()
+                toks_c = vid_to_tok[(bits_c.long() * shifts).sum(-1)]            # [pc,32], -1 invalid
+                nat1_c = nat_top1[s:s + args.pos_chunk]
+                t8_c = nat_top8[s:s + args.pos_chunk]
+                rr_recall.append((toks_c == nat1_c.unsqueeze(1)).any(-1).cpu())
+                rr_hit8.append((toks_c.unsqueeze(-1) == t8_c.unsqueeze(1)).any(-1).any(-1).cpu())
+                rr_hit4.append((toks_c.unsqueeze(-1) == t8_c[:, :4].unsqueeze(1)).any(-1).any(-1).cpu())
+                sc = logits_flat[s:s + args.pos_chunk].gather(1, toks_c.clamp_min(0))
+                sc = sc.masked_fill(toks_c < 0, float("-inf"))
+                pick_c = toks_c.clamp_min(0).gather(1, sc.argmax(-1, keepdim=True)).squeeze(-1)
+                rr_agree.append((pick_c == nat1_c).cpu())
             print(f"batch {i // args.batch + 1}/{(n_chunks + args.batch - 1) // args.batch}")
 
     rank_gt = torch.cat(rank_gt).float().numpy()
@@ -115,6 +139,13 @@ def main():
             "hit_native_top4_on_miss": float(torch.cat(hit_any4)[~torch.cat(top1_in)].float().mean().item()),
         },
         "rerank_top1_agreement_vs_native": float(torch.cat(rerank_hit).float().mean().item()),
+        "cascade32_native_mass_captured": float(torch.cat(mass32).mean().item()),
+        "round_proposal_32comp": {
+            "recall_vs_native_top1": float(torch.cat(rr_recall).float().mean().item()),
+            "hit_native_top8": float(torch.cat(rr_hit8).float().mean().item()),
+            "hit_native_top4": float(torch.cat(rr_hit4).float().mean().item()),
+            "rerank_agreement": float(torch.cat(rr_agree).float().mean().item()),
+        },
         "mob_head": {"nll": mob_nll, "ppl": float(np.exp(mob_nll))},
         "native_head": {"nll": nat_nll, "ppl": float(np.exp(nat_nll))},
         "ppl_ratio_mob_over_native": float(np.exp(mob_nll - nat_nll)),

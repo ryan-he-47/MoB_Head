@@ -73,9 +73,9 @@
 
 **解码路径开销实测（2026-09-02，K=128 WSD 头，batch 1，头前向+解码整步）**：
 
-| 平台 | round（旧） | mixture-argmax | mixture+级联重排 | 参考：原生头单步 |
-|---|---|---|---|---|
-| GPU | 1.98 ms | 2.62 ms（+0.64） | 2.56 ms（+0.58） | 2.43 ms |
-| CPU fp32 | 5.76 ms | 24.5 ms（+18.8） | 27.6 ms（+21.8） | 41.2 ms |
+| 平台 | round（旧） | mixture-argmax | mixture+级联重排 | **round+级联重排** | 参考：原生头单步 |
+|---|---|---|---|---|---|
+| GPU | 1.76 ms | 2.72 ms（+0.95） | 2.76 ms（+1.0） | **1.14 ms（−0.6）** | 2.43 ms |
+| CPU fp32 | 5.45 ms | 20.3 ms（+14.9） | 22.4 ms（+17.0） | **6.42 ms（+0.97）** | 41.2 ms |
 
-实现要点（`mob_common.mixture_topk`）：全顶点排名原本被 16.4M 次 exp 拖死（CPU +33~45ms）；改用**界剪枝精确排名**——L(v)=max_k A[v,k] ≤ log p_mix(v) ≤ L(v)+log K，只对幸存者做精确 logsumexp，结果与全排名逐位相同（20 试验×3 topn 验证），常数项折进单个 [V,18]@[18,K] GEMM。结论：GPU 上级联整步与原生头基本持平（2.6 vs 2.4ms，e2e 影响 ~2%）；CPU 上级联整步 27.6ms 仍快于原生头 41.2ms（1.5×），e2e 影响 ~10%（backbone 主导）；带宽账不变：码本扫描 0.3MB + gather 131KB vs 原生 501MiB。CPU 进一步余量：bf16 GEMM / 码本 bit-packing（未做，记录在案）。
+实现要点：混合排名走 `mixture_topk` 界剪枝精确排名（与全排名逐位相同，20 试验×3 topn 验证；常数折进单个 [V,18]@[18,K] GEMM；未剪枝的朴素版被 16.4M 次 exp 拖死，CPU +33~45ms）。**round 提议版级联（用户追问落地）几乎零开销**：提议只是 top-32 π 分量逐位取整，GPU 整步甚至比旧 round 解码还快（少了逐位循环与 Hamming 回退分支），CPU 只 +1ms。保真对照（docs/09 §6.1）：round+重排 89.9% vs mixture+重排 92.2%。结论：GPU 两档都与原生头单步持平；CPU 效率档（round+重排）6.4× 快于原生头，保真档（mixture+重排）1.8×。带宽账不变：码本扫描 0.3MB（round 档连这也免了）+ gather 131KB vs 原生 501MiB。CPU 进一步余量：bf16 GEMM / 码本 bit-packing（未做，记录在案）。

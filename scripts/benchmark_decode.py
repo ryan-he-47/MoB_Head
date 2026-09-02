@@ -155,11 +155,18 @@ def main():
         bl, pl = heads["MoB-K128"](h1.float())
         decode_rerank_native(bl, F.log_softmax(pl, -1), codes_all, E, h1)
 
+    def g_rerank_round():
+        bl, pl = heads["MoB-K128"](h1.float())
+        decode_rerank_native(bl, F.log_softmax(pl, -1), codes_all, E, h1,
+                             proposal="round", vid_to_tok=vid_to_tok)
+
     t_gr = bench_gpu(g_round)
     t_gm = bench_gpu(g_mix)
     t_grr = bench_gpu(g_rerank)
+    t_grrr = bench_gpu(g_rerank_round)
     print(f"GPU: round {t_gr*1e3:7.3f}ms | mixture-argmax {t_gm*1e3:7.3f}ms "
-          f"(+{(t_gm-t_gr)*1e3:6.3f}ms) | mixture+rerank {t_grr*1e3:7.3f}ms (+{(t_grr-t_gr)*1e3:6.3f}ms)")
+          f"(+{(t_gm-t_gr)*1e3:6.3f}ms) | mixture+rerank {t_grr*1e3:7.3f}ms (+{(t_grr-t_gr)*1e3:6.3f}ms) | "
+          f"round+rerank {t_grrr*1e3:7.3f}ms (+{(t_grrr-t_gr)*1e3:6.3f}ms)")
 
     def c_mix128():
         bl, pl = head128_cpu(h_cpu)
@@ -169,10 +176,17 @@ def main():
         bl, pl = head128_cpu(h_cpu)
         decode_rerank_native(bl, F.log_softmax(pl, -1), codes_cpu, E_cpu, h_cpu)
 
+    def c_rerank128_round():
+        bl, pl = head128_cpu(h_cpu)
+        decode_rerank_native(bl, F.log_softmax(pl, -1), codes_cpu, E_cpu, h_cpu,
+                             proposal="round", vid_to_tok=vid_cpu)
+
     t_cm_mix = bench_cpu(c_mix128)
     t_cm_rr = bench_cpu(c_rerank128)
+    t_cm_rrr = bench_cpu(c_rerank128_round)
     print(f"CPU: round {t_cm128*1e3:7.3f}ms | mixture-argmax {t_cm_mix*1e3:7.3f}ms "
-          f"(+{(t_cm_mix-t_cm128)*1e3:6.3f}ms) | mixture+rerank {t_cm_rr*1e3:7.3f}ms (+{(t_cm_rr-t_cm128)*1e3:6.3f}ms)")
+          f"(+{(t_cm_mix-t_cm128)*1e3:6.3f}ms) | mixture+rerank {t_cm_rr*1e3:7.3f}ms (+{(t_cm_rr-t_cm128)*1e3:6.3f}ms) | "
+          f"round+rerank {t_cm_rrr*1e3:7.3f}ms (+{(t_cm_rrr-t_cm128)*1e3:6.3f}ms)")
 
     # ---------- end-to-end greedy decode ----------
     print("\n== end-to-end greedy decode (KV cache, prefill excluded) ==")
