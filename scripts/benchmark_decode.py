@@ -41,6 +41,9 @@ def bench_cpu(fn, warmup=5, reps=30):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gen-tokens", type=int, default=64)
+    ap.add_argument("--cpu-e2e", action="store_true",
+                    help="also run end-to-end greedy decode on CPU (fp32, slow)")
+    ap.add_argument("--cpu-tokens", type=int, default=32)
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -112,19 +115,29 @@ def main():
     head32_cpu.load_state_dict(torch.load(
         r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt"))
     head32_cpu.eval()
+    head128_cpu = MoBHead(k=128, width=3072)
+    head128_cpu.load_state_dict(torch.load(
+        r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt"))
+    head128_cpu.eval()
     vid_cpu = vid_to_tok.cpu()
     codes_cpu = codes_all.cpu()
 
     def c_native():
         torch.softmax(F.linear(h_cpu, E_cpu), dim=-1).argmax(-1)
 
-    def c_mob():
+    def c_mob32():
         bl, pl = head32_cpu(h_cpu)
         decode_greedy(bl, F.log_softmax(pl, -1), vid_cpu, codes_cpu)
 
+    def c_mob128():
+        bl, pl = head128_cpu(h_cpu)
+        decode_greedy(bl, F.log_softmax(pl, -1), vid_cpu, codes_cpu)
+
     t_cn = bench_cpu(c_native)
-    t_cm = bench_cpu(c_mob)
-    print(f"native: {t_cn*1e3:9.3f}ms   MoB-K32: {t_cm*1e3:9.3f}ms   speedup {t_cn/t_cm:.1f}x")
+    t_cm = bench_cpu(c_mob32)
+    t_cm128 = bench_cpu(c_mob128)
+    print(f"native: {t_cn*1e3:9.3f}ms   MoB-K32: {t_cm*1e3:9.3f}ms ({t_cn/t_cm:.1f}x)   "
+          f"MoB-K128-wsd: {t_cm128*1e3:9.3f}ms ({t_cn/t_cm128:.1f}x)")
 
     # ---------- end-to-end greedy decode ----------
     print("\n== end-to-end greedy decode (KV cache, prefill excluded) ==")
@@ -170,6 +183,58 @@ def main():
     r_128 = run_mob(heads["MoB-K128"])
     print(f"native: {r_n:.1f} tok/s   MoB-K32: {r_32:.1f} tok/s ({r_32/r_n:.3f}x)   "
           f"MoB-K128: {r_128:.1f} tok/s ({r_128/r_n:.3f}x)")
+
+    # ---------- end-to-end greedy decode on CPU (edge-like) ----------
+    if args.cpu_e2e:
+        print("\n== end-to-end greedy decode on CPU (fp32) ==")
+        model_cpu = AutoModelForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.float32).eval()
+        vid_cpu = vid_to_tok.cpu()
+        codes_cpu = codes_all.cpu()
+        heads_cpu = {}
+        for tag, path, k, w in [
+            ("MoB-K32", r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
+            ("MoB-K128", r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt", 128, 3072),
+        ]:
+            hd = MoBHead(k=k, width=w)
+            hd.load_state_dict(torch.load(path, map_location="cpu"))
+            hd.eval()
+            heads_cpu[tag] = hd
+        ids0c = tok(PROMPT, return_tensors="pt").input_ids
+        n_new = args.cpu_tokens
+
+        def run_native_cpu():
+            with torch.no_grad():
+                out = model_cpu(ids0c, use_cache=True)
+                past = out.past_key_values
+                nt = out.logits[0, -1].argmax().item()
+                t0 = time.perf_counter()
+                for _ in range(n_new):
+                    out = model_cpu(torch.tensor([[nt]]), past_key_values=past, use_cache=True)
+                    past = out.past_key_values
+                    nt = out.logits[0, -1].argmax().item()
+                return n_new / (time.perf_counter() - t0)
+
+        def run_mob_cpu(head):
+            with torch.no_grad():
+                out = model_cpu.model(ids0c, use_cache=True)
+                past = out.past_key_values
+                h = out.last_hidden_state[:, -1].float()
+                bl, pl = head(h)
+                nt = decode_greedy(bl, F.log_softmax(pl, -1), vid_cpu, codes_cpu)[0].item()
+                t0 = time.perf_counter()
+                for _ in range(n_new):
+                    out = model_cpu.model(torch.tensor([[nt]]), past_key_values=past, use_cache=True)
+                    past = out.past_key_values
+                    h = out.last_hidden_state[:, -1].float()
+                    bl, pl = head(h)
+                    nt = decode_greedy(bl, F.log_softmax(pl, -1), vid_cpu, codes_cpu)[0].item()
+                return n_new / (time.perf_counter() - t0)
+
+        rc_n = run_native_cpu()
+        rc_32 = run_mob_cpu(heads_cpu["MoB-K32"])
+        rc_128 = run_mob_cpu(heads_cpu["MoB-K128"])
+        print(f"native: {rc_n:.2f} tok/s   MoB-K32: {rc_32:.2f} tok/s ({rc_32/rc_n:.3f}x)   "
+              f"MoB-K128: {rc_128:.2f} tok/s ({rc_128/rc_n:.3f}x)")
 
 
 if __name__ == "__main__":
