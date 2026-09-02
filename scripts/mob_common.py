@@ -1,5 +1,7 @@
 # Shared MoB (Mixture of factorized Bernoullis) head definition + stable loss math.
 # Used by p2_train.py and p3_eval.py. Spec: docs/03-experiment-plan.md sections 4.2-4.3.
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -60,10 +62,35 @@ def mixture_vertex_logprob(bit_logits, log_pi, codes_all):
     valid vertex, in vocab-id order. bit_logits [n,K,M], log_pi [n,K],
     codes_all [V,M] (0/1). Returns [n,V] fp32.
     Memory: [n,V,K] fp32 intermediate — chunk n for batched use
-    (n=1 decode: K=128 -> 66 MB; n=16 eval chunks -> ~1 GB)."""
-    term = torch.einsum("vm,nkm->nvk", codes_all, bit_logits)
+    (n=1 decode: K=128 -> 66 MB; n=16 eval chunks -> ~1 GB).
+    n==1 fast path routes the code-scoring through a [V,M]@[M,K] GEMM
+    (~3-10x faster than the einsum on CPU/GPU, identical math)."""
+    if bit_logits.shape[0] == 1:
+        term = (codes_all @ bit_logits[0].T).unsqueeze(0)      # [1,V,K]
+    else:
+        term = torch.einsum("vm,nkm->nvk", codes_all, bit_logits)
     base = F.logsigmoid(-bit_logits).sum(-1).unsqueeze(1)      # [n,1,K]
     return torch.logsumexp(log_pi.unsqueeze(1) + term + base, dim=-1)
+
+
+def mixture_topk(bit_logits, log_pi, codes_all, topn):
+    """Exact top-n token ids by full mixture probability, for n_batch==1 decode.
+    Bound pruning: with A[v,k] = log_pi_k + log Bern(v; theta_k),
+    L(v) = max_k A[v,k] <= log p_mix(v) <= L(v) + log K = U(v); only vertices
+    with L >= (topn-th largest L) - log K can reach the top-n set and get the
+    exact logsumexp — result is IDENTICAL to ranking mixture_vertex_logprob.
+    Constants (per-bit base + log_pi) are folded into one [V,M+1]@[M+1,K] GEMM.
+    codes_all [V,M] in vocab-id order -> returned indices are token ids."""
+    K = bit_logits.shape[1]
+    z = bit_logits[0]                                          # [K,M]
+    base = F.logsigmoid(-z).sum(-1) + log_pi[0]                # [K]
+    ones = torch.ones(codes_all.shape[0], 1, dtype=codes_all.dtype, device=codes_all.device)
+    A = torch.cat([codes_all, ones], 1) @ torch.cat([z, base.unsqueeze(1)], 1).T  # [V,K]
+    L = A.max(-1).values                                       # [V]
+    thresh = L.topk(topn).values[-1]
+    keep = (L >= thresh - math.log(K)).nonzero(as_tuple=True)[0]  # exact-prune survivors
+    exact = torch.logsumexp(A[keep], dim=-1)                   # exp on survivors only
+    return keep[exact.topk(topn).indices]                      # [topn] token ids
 
 
 def decode_mixture_argmax(bit_logits, log_pi, codes_all):
@@ -71,17 +98,24 @@ def decode_mixture_argmax(bit_logits, log_pi, codes_all):
     valid vertices by full mixture probability, take top-1 — no component pick,
     no rounding, no Hamming fallback needed. codes_all is [V,M] in vocab-id
     order, so the argmax index IS the token id. Returns [n] long.
-    Batched callers must chunk over n (see mixture_vertex_logprob note)."""
+    n==1 uses the bound-pruned exact path; batched callers must chunk over n
+    (see mixture_vertex_logprob note)."""
+    if bit_logits.shape[0] == 1:
+        return mixture_topk(bit_logits, log_pi, codes_all, 1)
     return mixture_vertex_logprob(bit_logits, log_pi, codes_all).argmax(-1)
 
 
 def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32):
-    """Cascade decode (evaluated 2026-09-02, docs/09 section 6): MoB mixture
-    proposes top-n candidate tokens, then exact native logits h @ E[cand]^T
-    rescore them (reads topn x H rows of the tied embedding table, ~131 KB at
-    topn=32 — no full-V matmul). Top-1 agreement ceiling = MoB top-n recall of
-    native top-1. E [V,H] any dtype, h [n,H]. Returns [n] long."""
-    cand = mixture_vertex_logprob(bit_logits, log_pi, codes_all).topk(topn, dim=-1).indices
+    """Cascade decode (mainline-adopted 2026-09-02, docs/09 section 6.1): MoB
+    mixture proposes top-n candidate tokens (exact bound-pruned ranking), then
+    exact native logits h @ E[cand]^T rescore them (reads topn x H rows of the
+    tied embedding table, ~131 KB at topn=32 — no full-V matmul). Top-1
+    agreement ceiling = MoB top-n recall of native top-1 (measured 93.9%).
+    E [V,H] any dtype, h [n,H]. Returns [n] long."""
+    if bit_logits.shape[0] == 1:
+        cand = mixture_topk(bit_logits, log_pi, codes_all, topn).unsqueeze(0)
+    else:
+        cand = mixture_vertex_logprob(bit_logits, log_pi, codes_all).topk(topn, dim=-1).indices
     E_sub = E[cand]                                            # [n,topn,H]
     scores = torch.einsum("nh,nth->nt", h.to(E_sub.dtype), E_sub)
     return cand.gather(-1, scores.argmax(-1, keepdim=True)).squeeze(-1)

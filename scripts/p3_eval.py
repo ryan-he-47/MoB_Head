@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy, decode_mixture_argmax
+from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy, decode_mixture_argmax, decode_rerank_native
 
 
 def load_tokens(tok, data_glob, cache_path, eos_id):
@@ -51,11 +51,13 @@ def main():
     ap.add_argument("--token-cache", default=None,
                     help="eval directly on this token cache (default: babylm_dev_tokens.npy)")
     ap.add_argument("--gen-tokens", type=int, default=40)
-    ap.add_argument("--decode", choices=["round", "mixture"], default="round",
+    ap.add_argument("--decode", choices=["round", "mixture", "rerank"], default="round",
                     help="greedy decode path for generation samples: round = pick-component+round "
                          "(default, comparable with earlier runs); mixture = mixture-argmax over all "
-                         "valid vertices (mainline per docs/11 section 10). The agreement metric "
-                         "always uses round; mixture-argmax agreement is recall@1 in eval_topk_recall.py")
+                         "valid vertices; rerank = mixture top-32 proposal + exact native-logit "
+                         "rescoring (cascade, mainline-adopted 2026-09-02, docs/09 section 6.1). "
+                         "The agreement metric always uses round; mixture-argmax agreement is "
+                         "recall@1 in eval_topk_recall.py")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # GBK console safety
     os.makedirs(args.outdir, exist_ok=True)
@@ -148,6 +150,9 @@ def main():
         if tau is None:  # greedy
             if args.decode == "mixture":
                 return decode_mixture_argmax(bl, log_pi, codes_all)[0].item()
+            if args.decode == "rerank":
+                E = model.get_input_embeddings().weight
+                return decode_rerank_native(bl, log_pi, codes_all, E, h)[0].item()
             return decode_greedy(bl, log_pi, vid_to_tok, codes_all)[0].item()
         probs = F.softmax(pl / tau, dim=-1)
         k = torch.multinomial(probs, 1).item()

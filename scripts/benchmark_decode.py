@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob_common import H, M, MoBHead, decode_greedy
+from mob_common import H, M, MoBHead, decode_greedy, decode_mixture_argmax, decode_rerank_native
 
 V = 128256
 MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
@@ -138,6 +138,41 @@ def main():
     t_cm128 = bench_cpu(c_mob128)
     print(f"native: {t_cn*1e3:9.3f}ms   MoB-K32: {t_cm*1e3:9.3f}ms ({t_cn/t_cm:.1f}x)   "
           f"MoB-K128-wsd: {t_cm128*1e3:9.3f}ms ({t_cn/t_cm128:.1f}x)")
+
+    # ---------- decode-path overhead (K=128 head fwd + decode, batch 1) ----------
+    print("\n== decode-path overhead (K=128 head fwd + decode step, batch 1) ==")
+    h1 = torch.randn(1, H, dtype=torch.bfloat16, device="cuda")
+
+    def g_round():
+        bl, pl = heads["MoB-K128"](h1.float())
+        decode_greedy(bl, F.log_softmax(pl, -1), vid_to_tok, codes_all)
+
+    def g_mix():
+        bl, pl = heads["MoB-K128"](h1.float())
+        decode_mixture_argmax(bl, F.log_softmax(pl, -1), codes_all)
+
+    def g_rerank():
+        bl, pl = heads["MoB-K128"](h1.float())
+        decode_rerank_native(bl, F.log_softmax(pl, -1), codes_all, E, h1)
+
+    t_gr = bench_gpu(g_round)
+    t_gm = bench_gpu(g_mix)
+    t_grr = bench_gpu(g_rerank)
+    print(f"GPU: round {t_gr*1e3:7.3f}ms | mixture-argmax {t_gm*1e3:7.3f}ms "
+          f"(+{(t_gm-t_gr)*1e3:6.3f}ms) | mixture+rerank {t_grr*1e3:7.3f}ms (+{(t_grr-t_gr)*1e3:6.3f}ms)")
+
+    def c_mix128():
+        bl, pl = head128_cpu(h_cpu)
+        decode_mixture_argmax(bl, F.log_softmax(pl, -1), codes_cpu)
+
+    def c_rerank128():
+        bl, pl = head128_cpu(h_cpu)
+        decode_rerank_native(bl, F.log_softmax(pl, -1), codes_cpu, E_cpu, h_cpu)
+
+    t_cm_mix = bench_cpu(c_mix128)
+    t_cm_rr = bench_cpu(c_rerank128)
+    print(f"CPU: round {t_cm128*1e3:7.3f}ms | mixture-argmax {t_cm_mix*1e3:7.3f}ms "
+          f"(+{(t_cm_mix-t_cm128)*1e3:6.3f}ms) | mixture+rerank {t_cm_rr*1e3:7.3f}ms (+{(t_cm_rr-t_cm128)*1e3:6.3f}ms)")
 
     # ---------- end-to-end greedy decode ----------
     print("\n== end-to-end greedy decode (KV cache, prefill excluded) ==")

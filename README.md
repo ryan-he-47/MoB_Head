@@ -10,7 +10,17 @@ This project replaces the unembedding layer with a compact **Mixture of factoriz
 
 1. **Semantic binary tree codebook** — each vocab token gets a 17-bit code (a vertex of the 17-dim unit hypercube), assigned by a balanced spectral-style binary tree over the model's own embedding table, so nearby codes are semantically close.
 2. **MoB head** — a small MLP (3 layers, SiLU) maps the backbone's hidden state to K mixture components of per-bit Bernoulli logits + mixture weights. Trained by **exact weighted-expectation distillation** from the frozen teacher's top-1024 next-token distribution. No sampling, no noise, no V-dim anything.
-3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax). An optional cascade mode rescores the MoB top-32 proposals with 32 rows of the tied embedding table (top-1 fidelity 92.2% vs native, ~131 KB/step) — see `docs/09` §6.1.
+3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax; exact bound-pruned ranking via `mixture_topk`). A cascade mode (mainline) rescores the MoB top-32 proposals with 32 rows of the tied embedding table (top-1 fidelity 92.2% vs native, ~131 KB/step) — see `docs/09` §6.1.
+
+### Decode fidelity (WSD K=128 head @ step 100k, FineWeb-Edu dev, 16,384 positions)
+
+| Decode path | top-1 agreement vs native | added cost / decode step |
+|---|---|---|
+| component pick + round (early) | 0.717 | — |
+| mixture-argmax (mainline) | 0.745 | ~0.3 MB codebook scan (+0.6 ms GPU, parity with native head step) |
+| + cascade rerank (mainline) | **0.922** | +32-row embedding gather ≈131 KB (+0.6 ms GPU; CPU step 27.6 ms vs native 41.2 ms) |
+
+Failures degrade gracefully: on the 6.1% of positions where the native top-1 escapes the MoB top-32, the candidate set still contains a native top-8 token 95.1% of the time — the reranker lands on the teacher's 2nd–8th choice, not on garbage (`docs/09` §6.1, `docs/08` §5).
 
 ## Why it's interesting
 
