@@ -56,7 +56,7 @@ def main():
     heads = {}
     for tag, path, k, w in [
         ("MoB-K32", r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
-        ("MoB-K128", r"E:\Trash_things\llm_codec\runs\p3_k128_stab\head_final.pt", 128, 3072),
+        ("MoB-K128", r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt", 128, 3072),
     ]:
         head = MoBHead(k=k, width=w).cuda()
         head.load_state_dict(torch.load(path))
