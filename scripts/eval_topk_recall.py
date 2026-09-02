@@ -44,6 +44,7 @@ def main():
     chunks = torch.from_numpy(dev[: n_chunks * (T + 1)].reshape(n_chunks, T + 1).copy()).long().cuda()
 
     rank_gt, rank_nat, mnll, nnll = [], [], [], []
+    cov_nat8, mass_nat8, rerank_hit = [], [], []
     V = codes_all.shape[0]
     with torch.no_grad():
         for i in range(0, n_chunks, args.batch):
@@ -53,7 +54,10 @@ def main():
             h = out.hidden_states[-1].float().reshape(-1, H)
             logits = out.logits.float()
             nnll.append(F.cross_entropy(logits.reshape(-1, V), tgt, reduction="none"))
-            nat_top1 = logits.argmax(-1).reshape(-1)
+            logits_flat = logits.reshape(-1, V)
+            nat_top1 = logits_flat.argmax(-1)
+            nat_top8 = logits_flat.topk(8, dim=-1).indices               # [n,8]
+            nat_p8 = F.softmax(logits_flat, dim=-1).gather(1, nat_top8)  # [n,8] native mass
 
             bl, pl = head(h)
             log_pi = F.log_softmax(pl, dim=-1)
@@ -70,16 +74,32 @@ def main():
                 rank_gt.append(((mix > lp_gt.unsqueeze(1)).sum(-1) + 1).cpu())
                 rank_nat.append(((mix > lp_nat.unsqueeze(1)).sum(-1) + 1).cpu())
                 mnll.append((logZ - lp_gt).cpu())
+                # task 2: coverage of the native head's top-8 by the MoB top-32
+                cand32 = mix.topk(32, dim=-1).indices                     # [pc,32]
+                hits8 = (cand32.unsqueeze(-1) == nat_top8[s:s + args.pos_chunk].unsqueeze(1)).any(1)  # [pc,8]
+                cov_nat8.append(hits8.float().mean(-1).cpu())
+                p8 = nat_p8[s:s + args.pos_chunk]
+                mass_nat8.append(((hits8 * p8).sum(-1) / p8.sum(-1).clamp_min(1e-30)).cpu())
+                # task 3: cascade rerank — native logits rescored on the 32
+                # candidates; agreement == native top-1 in cand32 by construction
+                pick = cand32.gather(1, logits_flat[s:s + args.pos_chunk]
+                                     .gather(1, cand32).argmax(-1, keepdim=True)).squeeze(-1)
+                rerank_hit.append((pick == nat_top1[s:s + args.pos_chunk]).cpu())
             print(f"batch {i // args.batch + 1}/{(n_chunks + args.batch - 1) // args.batch}")
 
     rank_gt = torch.cat(rank_gt).float().numpy()
     rank_nat = torch.cat(rank_nat).float().numpy()
+    cov = torch.cat(cov_nat8).numpy()
     mob_nll = torch.cat(mnll).mean().item()
     nat_nll = torch.cat(nnll).mean().item()
     result = {
         "n_positions": int(len(rank_gt)),
         "topk_recall_vs_ground_truth": {f"top-{k}": float((rank_gt <= k).mean()) for k in (1, 8, 32)},
         "topk_recall_vs_native_top1": {f"top-{k}": float((rank_nat <= k).mean()) for k in (1, 8, 32)},
+        "coverage_native_top8_by_mob_top32": float(cov.mean()),
+        "coverage_native_top8_mean_count_of_8": float(cov.mean() * 8),
+        "coverage_native_top8_mass_by_mob_top32": float(torch.cat(mass_nat8).mean().item()),
+        "rerank_top1_agreement_vs_native": float(torch.cat(rerank_hit).float().mean().item()),
         "mob_head": {"nll": mob_nll, "ppl": float(np.exp(mob_nll))},
         "native_head": {"nll": nat_nll, "ppl": float(np.exp(nat_nll))},
         "ppl_ratio_mob_over_native": float(np.exp(mob_nll - nat_nll)),

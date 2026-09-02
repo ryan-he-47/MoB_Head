@@ -69,6 +69,7 @@ MoB 头: h -> 3 层 MLP(SiLU) -> 128 分量 × 17 位逐位伯努利 logits + 12
 ## 10. 开放问题与已决边界
 
 - 在途：B+A 长训（FineWeb-Edu 1B tokens、K=128）余弦版 vs WSD 版的头对头（docs/12 记录）。
-- **已入主线待实施：混合概率全顶点排名解码（mixture-argmax decode）**——对全部合法顶点按 Σ_k π_k·Π_j Bern(c_j;θ_kj) 排名取 top-1，替代"选分量+逐位取整"。实测比现行贪心高 ~3 个点（docs/09 §6），带宽代价仅扫码本 ~0.3MB（远低于原头 501MiB）。用户拍板 2026-09-02 并进主线，后续实施。
+- **已实施入主线（2026-09-02）：混合概率全顶点排名解码（mixture-argmax decode）**——对全部合法顶点按 Σ_k π_k·Π_j Bern(c_j;θ_kj) 排名取 top-1，替代"选分量+逐位取整"。实测 +~3 点一致率（0.745 vs 0.717），带宽代价仅扫码本 ~0.3MB。实现：`mob_common.decode_mixture_argmax` / `mixture_vertex_logprob`；`p3_eval.py --decode mixture`（默认仍 round 以保证与已跑完头对头可比）。
+- **已评估待拍板：级联重排解码（DeepSeek 建议）**——MoB top-32 提议 + 嵌入表 32 行精确重排，top-1 保真 92.2%（上限=召回 93.9%），开销 ~131KB gather/步。边界：变级联系统、采样分布近似、给不出全分布 PPL。实测与完整分析：docs/09 §6.1。实现：`mob_common.decode_rerank_native`。
 - 已否决：ECC 纠错码（主线不加，留消融；分析见 docs/03 §4.6）；GMM 主线（降为对照）；编码器 MLP 替代嵌入表（信息论+结构双重不可行，docs/10）。
 - 已知限制：tied 嵌入模型上本项目收益是计算/带宽而非参数量；教师分布弥散语料上 top-k 截断的残余偏差；采样模式（τ=1.0）在当前训练度下不可用。

@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy
+from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy, decode_mixture_argmax
 
 
 def load_tokens(tok, data_glob, cache_path, eos_id):
@@ -51,6 +51,11 @@ def main():
     ap.add_argument("--token-cache", default=None,
                     help="eval directly on this token cache (default: babylm_dev_tokens.npy)")
     ap.add_argument("--gen-tokens", type=int, default=40)
+    ap.add_argument("--decode", choices=["round", "mixture"], default="round",
+                    help="greedy decode path for generation samples: round = pick-component+round "
+                         "(default, comparable with earlier runs); mixture = mixture-argmax over all "
+                         "valid vertices (mainline per docs/11 section 10). The agreement metric "
+                         "always uses round; mixture-argmax agreement is recall@1 in eval_topk_recall.py")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # GBK console safety
     os.makedirs(args.outdir, exist_ok=True)
@@ -141,6 +146,8 @@ def main():
         bl, pl = head(h)
         log_pi = F.log_softmax(pl, dim=-1)
         if tau is None:  # greedy
+            if args.decode == "mixture":
+                return decode_mixture_argmax(bl, log_pi, codes_all)[0].item()
             return decode_greedy(bl, log_pi, vid_to_tok, codes_all)[0].item()
         probs = F.softmax(pl / tau, dim=-1)
         k = torch.multinomial(probs, 1).item()

@@ -10,7 +10,7 @@ This project replaces the unembedding layer with a compact **Mixture of factoriz
 
 1. **Semantic binary tree codebook** — each vocab token gets a 17-bit code (a vertex of the 17-dim unit hypercube), assigned by a balanced spectral-style binary tree over the model's own embedding table, so nearby codes are semantically close.
 2. **MoB head** — a small MLP (3 layers, SiLU) maps the backbone's hidden state to K mixture components of per-bit Bernoulli logits + mixture weights. Trained by **exact weighted-expectation distillation** from the frozen teacher's top-1024 next-token distribution. No sampling, no noise, no V-dim anything.
-3. **Decoding** — pick a component by its weight (temperature), round its per-bit probabilities to a vertex, map to a token id. The h×V matmul and V-softmax never happen.
+3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax). An optional cascade mode rescores the MoB top-32 proposals with 32 rows of the tied embedding table (top-1 fidelity 92.2% vs native, ~131 KB/step) — see `docs/09` §6.1.
 
 ## Why it's interesting
 
