@@ -11,6 +11,10 @@
 # layers + final norm + MoB head, PURE MoB-NLL loss (no teacher) — MoB head is
 # the system's only output head. Panel: MoB dev NLL (acceptance vs pure-native
 # baseline), native drift NLL (diagnostic), BabyLM OOD MoB NLL (canary).
+# v2 (user course-correction 2026-09-03): NLL jitter too aggressive — warmup
+# 500->2000, LR down ~0.7 order (backbone 2e-5->5e-6, head 1e-4->2e-5);
+# priority is a clean declining curve, slow is fine. Old run's log kept in
+# runs/p4_joint/ for comparison.
 set -euxo pipefail
 cd /gpfs1/home/yihe47/llm_codec
 PY=/home/yihe47/miniconda3/envs/cose2/bin/python
@@ -23,9 +27,9 @@ $PY scripts/p4_joint_train.py \
   --dev-cache fineweb_dev_tokens.npy \
   --ood-cache babylm_dev_tokens.npy \
   --steps 20000 --batch 8 \
-  --lr-backbone 2e-5 --lr-head 1e-4 --warmup 500 \
+  --lr-backbone 5e-6 --lr-head 2e-5 --warmup 2000 \
   --lora-r 32 --lora-layers 8 \
-  --panel-every 2000 --save-every 10000 \
-  --outdir runs/p4_joint
+  --panel-every 2000 --save-every 5000 \
+  --outdir runs/p4_joint_lowlr
 
 echo P4_SBatch_DONE
