@@ -26,3 +26,4 @@ logs/
 _lsp_check.py
 __pycache__/
 *.pyc
+data/fineweb_probe_tokens.npz
