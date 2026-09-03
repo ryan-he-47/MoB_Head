@@ -12,19 +12,19 @@ This project replaces the unembedding layer with a compact **Mixture of factoriz
 2. **MoB head** — a small MLP (3 layers, SiLU) maps the backbone's hidden state to K mixture components of per-bit Bernoulli logits + mixture weights. Trained by **exact weighted-expectation distillation** from the frozen teacher's top-1024 next-token distribution. No sampling, no noise, no V-dim anything.
 3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax; exact bound-pruned ranking via `mixture_topk`). A cascade mode (mainline) rescores the MoB top-32 proposals with 32 rows of the tied embedding table (top-1 fidelity 92.2% vs native, ~131 KB/step) — see `docs/09` §6.1.
 
-### Decode fidelity (WSD K=128 head @ step 100k — pre-decay checkpoint; FineWeb-Edu dev, 16,384 positions)
+### Decode fidelity (WSD K=128 final head, 1B-token run; FineWeb-Edu dev)
 
 | Decode path | top-1 agreement vs native | step latency (GPU / CPU) |
 |---|---|---|
-| component pick + round (early) | 0.717 | 1.76 ms / 5.45 ms |
-| mixture-argmax (mainline) | 0.745 | 2.72 ms / 20.3 ms |
-| cascade rerank, mixture proposal (mainline, fidelity mode) | **0.922** | 2.76 ms / 22.4 ms |
-| cascade rerank, round proposal (mainline, efficiency mode) | **0.899** | **1.14 ms / 6.42 ms** |
+| component pick + round (early) | 0.770 | 1.76 ms / 5.45 ms |
+| mixture-argmax (mainline) | 0.798 | 2.72 ms / 20.3 ms |
+| cascade rerank, round proposal (mainline, efficiency mode) | **0.922** | **1.14 ms / 6.42 ms** |
+| cascade rerank, mixture proposal (mainline, fidelity mode) | **0.938** | 2.76 ms / 22.4 ms |
 | native lm_head + softmax (reference) | 1.000 | 2.43 ms / 41.2 ms |
 
-Candidate-set quality (MoB top-32): catches ≥1 of the native top-8 on **99.7%** of positions, ≥1 of the native top-4 on **99.2%**. On the 6.1% of positions where the native top-1 escapes the set, **95.1%** still contain a native top-8 token — the reranker lands on the teacher's 2nd–8th choice, not on garbage. The 32 candidates carry **77.9%** of the native distribution's probability mass on average. Generations decoded with the cascade score **PPL 2.02 under the native head** vs native greedy's own 2.35 — statistically indistinguishable fluency (`docs/09` §6.1).
+Candidate-set quality (MoB top-32, 16,384 dev positions): recall of the native top-1 **95.7%**; catches ≥1 of the native top-8 on **99.9%** of positions, ≥1 of the native top-4 on **99.7%**. Of the 4.3% top-1 misses, **98.2%** still land on a native top-8 token. The 32 candidates carry **80.3%** of the native distribution's probability mass. Cascade generations score **PPL 2.27 under the native head** vs native greedy's own 2.35 — statistically indistinguishable (`docs/09` §6).
 
-Honest boundary: the full-distribution gap remains — normalized PPL of the MoB mixture vs native is 2.585× on this pre-decay checkpoint (the cosine run finished at 3.05×). The cascade closes *decode* fidelity; the density gap is the training-side frontier and narrows through the in-flight LR-decay phase.
+Honest boundary: the full-distribution gap is narrowed but not closed — normalized PPL of the MoB mixture vs native is **2.05×** on the final WSD head (cosine run: 3.05×), and the training curve was still rising at termination (`docs/09` §6). The cascade closes *decode* fidelity; the density gap is the training-side frontier.
 
 ## Why it's interesting
 
@@ -44,11 +44,10 @@ The architecture also makes the vocab interface fully symmetric and code-driven:
 ## Status
 
 - ✅ **Minimal implementation closed the loop end-to-end (2026-09-02)**: semantic-tree codebook → MoB distillation on a frozen backbone (exact weighted-NLL on teacher top-1024) → three decode paths (round / mixture-argmax / cascade rerank, exact bound-pruned) → CPU/GPU benchmarks — every stage verified on real checkpoints.
-- ✅ **Decode fidelity at usable level** (K=128 WSD head, pre-decay checkpoint): cascade top-1 agreement **92.2%** vs native; candidate set catches a native top-8 token on **99.7%** of positions; misses degrade to the teacher's 2nd–8th choice.
-- ✅ **Efficiency verified**: head bandwidth −75…−86%, head FLOPs 8–14× less, CPU head step up to 12.9× faster; cascade decode step 1.5× faster than native on CPU, parity on GPU; e2e +29–31% tok/s on CPU.
-- ✅ BabyLM-10M full distillation (K=32): normalized PPL 2.13×; cosine 1B-token run (K=128): PPL 3.05×, agreement 0.679 (`docs/09`).
-- 🔄 **In flight**: FineWeb-Edu 1B-token WSD-schedule run (ahead of the cosine baseline at matched steps) — final acceptance on completion; the fidelity numbers above are from a pre-decay checkpoint and should improve.
-- ❌ Known gaps: full-distribution fidelity (normalized PPL 2.6–3.0×); sampling-quality decoding untested.
+- ✅ **Large-scale run complete (2026-09-03)**: FineWeb-Edu 1B tokens, K=128 head, WSD schedule — normalized PPL **2.05×**, dev top-1 agreement **0.770** (round decode), clearly beating the cosine baseline (3.05×/0.679). Curve still rising at termination — more training is headroom, not a fix (`docs/09` §6).
+- ✅ **Decode fidelity at usable level** (final head): cascade top-1 agreement **92.2–93.8%** vs native; candidate set catches a native top-8 token on **99.9%** of positions; misses degrade to the teacher's 2nd–8th choice; cascade generations indistinguishable from native under the native head (PPL 2.27 vs 2.35).
+- ✅ **Efficiency verified**: head bandwidth −75…−86%, head FLOPs 8–14× less, CPU head step up to 12.9× faster; efficiency-mode cascade step 1.14 ms GPU / 6.42 ms CPU (6.4× faster than native on CPU); e2e +29–31% tok/s on CPU.
+- ❌ Known gaps: full-distribution fidelity (normalized PPL 2.05× — "comparable" not yet met); sampling-quality decoding untested; training not topped out (second epoch / extended decay untried).
 
 ## Repository layout
 

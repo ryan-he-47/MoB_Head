@@ -4,6 +4,7 @@
 # restricted 32-way softmax PPL would be trivially optimistic (p' = p/mass32);
 # scoring generated text under the native head is the honest fluency proxy.
 # Paths compared: native argmax / mixture-argmax / cascade rerank.
+import argparse
 import sys
 
 import numpy as np
@@ -24,13 +25,18 @@ GEN = 64
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt")
+    ap.add_argument("--k", type=int, default=128)
+    ap.add_argument("--width", type=int, default=3072)
+    args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
     model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16).cuda().eval()
     cb = np.load(r"E:\Trash_things\llm_codec\data\codebook.npz")
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
-    head = MoBHead(k=128, width=3072).cuda()
-    head.load_state_dict(torch.load(r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt"))
+    head = MoBHead(k=args.k, width=args.width).cuda()
+    head.load_state_dict(torch.load(args.head))
     head.eval()
     E = model.get_input_embeddings().weight
 
