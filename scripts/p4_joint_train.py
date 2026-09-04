@@ -51,6 +51,11 @@ def main():
                     help="peft adapter dir to continue from (head via --head)")
     ap.add_argument("--schedule", choices=["constant", "cosine"], default="constant",
                     help="cosine decays both LR groups to ~5%% after warmup (polish runs)")
+    ap.add_argument("--mode", choices=["lora", "unfreeze"], default="lora",
+                    help="lora = peft adapter; unfreeze = full-parameter last N layers + norm "
+                         "(escalation ladder rung 1, docs/14: LoRA's low-rank assumption does "
+                         "not fit reshape-h-geometry tasks)")
+    ap.add_argument("--n-layers", type=int, default=4, help="unfreeze mode: last N layers")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(args.outdir, exist_ok=True)
@@ -78,8 +83,15 @@ def main():
         p.requires_grad_(False)
     from peft import LoraConfig, PeftModel, get_peft_model
     n_layers = len(model.model.layers)
-    if args.resume_adapter:
+    if args.mode == "unfreeze":
+        backbone = model.model
+        for layer in backbone.layers[-args.n_layers:]:
+            for p in layer.parameters():
+                p.requires_grad_(True)
+            layer.float()  # fp32 trainable layers (Adam-safe), trunk stays bf16
+    elif args.resume_adapter:
         model = PeftModel.from_pretrained(model, args.resume_adapter, is_trainable=True)
+        backbone = model.get_base_model().model
     else:
         cfg = LoraConfig(r=args.lora_r, lora_alpha=2 * args.lora_r,
                          target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -87,8 +99,8 @@ def main():
                          layers_to_transform=list(range(n_layers - args.lora_layers, n_layers)),
                          task_type="CAUSAL_LM")
         model = get_peft_model(model, cfg)
-    model.enable_input_require_grads()
-    backbone = model.get_base_model().model
+        backbone = model.get_base_model().model
+    model.enable_input_require_grads() if args.mode == "lora" else None
     for p in backbone.norm.parameters():  # final norm trainable (geometry lever)
         p.requires_grad_(True)
         p.data = p.data.float()
@@ -164,7 +176,13 @@ def main():
 
     def save(tag):
         torch.save(head.state_dict(), os.path.join(args.outdir, f"head_{tag}.pt"))
-        model.save_pretrained(os.path.join(args.outdir, f"adapter_{tag}"))
+        if args.mode == "lora":
+            model.save_pretrained(os.path.join(args.outdir, f"adapter_{tag}"))
+        else:
+            torch.save({f"layer{i}": backbone.layers[i].state_dict()
+                        for i in range(n_layers - args.n_layers, n_layers)}
+                       | {"norm": backbone.norm.state_dict()},
+                       os.path.join(args.outdir, f"backbone_{tag}.pt"))
 
     flog = open(os.path.join(args.outdir, "train_log.jsonl"), "w", encoding="utf-8")
     json.dump({"args": vars(args)}, open(os.path.join(args.outdir, "config.json"), "w"))
