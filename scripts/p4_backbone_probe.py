@@ -57,6 +57,10 @@ def main():
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-layers", type=int, default=4)
     ap.add_argument("--lambda-ent", type=float, default=0.001)
+    ap.add_argument("--freeze-head", action="store_true",
+                    help="freeze the MoB head entirely (control arm: backbone-only co-adaptation)")
+    ap.add_argument("--norm-trainable", action="store_true",
+                    help="lora mode: also unfreeze the final norm (mirrors the cluster recipe)")
     ap.add_argument("--eval-every", type=int, default=200)
     ap.add_argument("--head", default=os.path.join(ROOT, "runs", "head_final_wsd.pt"))
     ap.add_argument("--out", default=None)
@@ -103,6 +107,10 @@ def main():
         model = get_peft_model(model, cfg)
         model.enable_input_require_grads()
         backbone = model.get_base_model().model  # LlamaModel inside the wrapped CausalLM
+        if args.norm_trainable:
+            for p in backbone.norm.parameters():
+                p.requires_grad_(True)
+                p.data = p.data.float()
         bb_trainable = [p for p in model.parameters() if p.requires_grad]
         for p in bb_trainable:  # LoRA params in fp32 for Adam stability
             p.data = p.data.float()
@@ -113,14 +121,18 @@ def main():
     head = MoBHead(k=128, width=3072)
     head.load_state_dict(torch.load(args.head, map_location="cpu"))
     head = head.cuda().float()
+    if args.freeze_head:
+        for p in head.parameters():
+            p.requires_grad_(False)
     cb = np.load(os.path.join(ROOT, "data", "codebook.npz"))
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
     E = model.get_input_embeddings().weight
 
-    opt = torch.optim.AdamW([
-        {"params": bb_trainable, "lr": args.lr_backbone},
-        {"params": list(head.parameters()), "lr": args.lr_head},
-    ], weight_decay=0.0)
+    head_params = [p for p in head.parameters() if p.requires_grad]
+    groups = [{"params": bb_trainable, "lr": args.lr_backbone}]
+    if head_params:
+        groups.append({"params": head_params, "lr": args.lr_head})
+    opt = torch.optim.AdamW(groups, weight_decay=0.0)
 
     @torch.no_grad()
     def evaluate(tag):
@@ -205,7 +217,7 @@ def main():
         loss = nll + args.lambda_ent * ent
         opt.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(bb_trainable + list(head.parameters()), 1.0)
+        torch.nn.utils.clip_grad_norm_(bb_trainable + head_params, 1.0)
         opt.step()
         if step % 50 == 0:
             print(f"step {step}/{args.steps}  nll {nll.item():.4f}  ent {ent.item():.3f}  "

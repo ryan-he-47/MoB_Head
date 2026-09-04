@@ -47,6 +47,10 @@ def main():
     ap.add_argument("--save-every", type=int, default=10000)
     ap.add_argument("--seed", type=int, default=44)
     ap.add_argument("--max-chunks", type=int, default=0)
+    ap.add_argument("--resume-adapter", default=None,
+                    help="peft adapter dir to continue from (head via --head)")
+    ap.add_argument("--schedule", choices=["constant", "cosine"], default="constant",
+                    help="cosine decays both LR groups to ~5%% after warmup (polish runs)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(args.outdir, exist_ok=True)
@@ -72,14 +76,17 @@ def main():
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     for p in model.parameters():
         p.requires_grad_(False)
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PeftModel, get_peft_model
     n_layers = len(model.model.layers)
-    cfg = LoraConfig(r=args.lora_r, lora_alpha=2 * args.lora_r,
-                     target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                                     "gate_proj", "up_proj", "down_proj"],
-                     layers_to_transform=list(range(n_layers - args.lora_layers, n_layers)),
-                     task_type="CAUSAL_LM")
-    model = get_peft_model(model, cfg)
+    if args.resume_adapter:
+        model = PeftModel.from_pretrained(model, args.resume_adapter, is_trainable=True)
+    else:
+        cfg = LoraConfig(r=args.lora_r, lora_alpha=2 * args.lora_r,
+                         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                                         "gate_proj", "up_proj", "down_proj"],
+                         layers_to_transform=list(range(n_layers - args.lora_layers, n_layers)),
+                         task_type="CAUSAL_LM")
+        model = get_peft_model(model, cfg)
     model.enable_input_require_grads()
     backbone = model.get_base_model().model
     for p in backbone.norm.parameters():  # final norm trainable (geometry lever)
@@ -103,7 +110,12 @@ def main():
     ], weight_decay=0.0)
 
     def lr_at(step, base):
-        return base * (step + 1) / args.warmup if step < args.warmup else base
+        if step < args.warmup:
+            return base * (step + 1) / args.warmup
+        if args.schedule == "cosine":
+            t = (step - args.warmup) / max(1, args.steps - args.warmup)
+            return base * (0.05 + 0.95 * 0.5 * (1 + np.cos(np.pi * t)))
+        return base
 
     @torch.no_grad()
     def mob_nll(eval_chunks, max_b=2):
