@@ -18,6 +18,7 @@ Core design (agreed with the user; decisions logged in `docs/03-experiment-plan.
 - **The user has final say on every technical decision.** Do not unilaterally change architecture, hyperparameters, datasets, or training procedure. Ask via the `question` tool when a decision point is reached; present options with effort estimates and a recommendation.
 - **The user acts as a resource-collection agent.** If you need something you cannot fetch yourself (model weights, datasets, packages, repos), instruct the user to download it rather than working around its absence.
 - **HPC etiquette:** cluster jobs run through **slurm**. NEVER run anything compute-heavy on a login node.
+- **Bad node (2026-09-05, user report): `gpu-v100s-06` sometimes allocates but never gives the GPU** (.out stays empty, not even nvidia-smi). All sbatch templates must carry `#SBATCH --exclude=gpu-v100s-06`. Twin jobs hit this and were requeued as 525553/525554 with the exclusion.
 - **Cluster connectivity:** the route to burgundy goes through the user's campus VPN, which drops periodically. If the server is unreachable (SSH/TCP timeout), it is almost certainly the VPN — **stop and stand by; do NOT probe or retry**. Resume when the user says it's back.
 - Local GPU is an RTX 4060 Laptop (8 GB) — prototypes must fit in 8 GB. Heavy training goes to the cloud queue.
 
