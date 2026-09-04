@@ -56,6 +56,10 @@ def main():
                          "(escalation ladder rung 1, docs/14: LoRA's low-rank assumption does "
                          "not fit reshape-h-geometry tasks)")
     ap.add_argument("--n-layers", type=int, default=4, help="unfreeze mode: last N layers")
+    ap.add_argument("--compute-dtype", choices=["bfloat16", "float16"], default="bfloat16",
+                    help="trunk/autocast dtype. V100 (pre-Ampere): use float16 + GradScaler — "
+                         "bf16 there runs through emulation paths that NaN'd full-parameter "
+                         "training within 400 warmup steps (job 524864, docs/14)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(args.outdir, exist_ok=True)
@@ -77,7 +81,8 @@ def main():
     ood_chunks = torch.from_numpy(ood[: n_ood * (T + 1)].reshape(n_ood, T + 1).copy()).long().cuda()
     print(f"train chunks {n_chunks}, dev {n_dev}, ood {n_ood}")
 
-    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16).cuda()
+    compute_dtype = getattr(torch, args.compute_dtype)
+    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=compute_dtype).cuda()
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     for p in model.parameters():
         p.requires_grad_(False)
@@ -120,6 +125,7 @@ def main():
         {"params": bb_trainable, "lr": args.lr_backbone},
         {"params": list(head.parameters()), "lr": args.lr_head},
     ], weight_decay=0.0)
+    scaler = torch.amp.GradScaler("cuda", enabled=(compute_dtype == torch.float16))
 
     def lr_at(step, base):
         if step < args.warmup:
@@ -134,7 +140,7 @@ def main():
         nlls = []
         for i in range(0, len(eval_chunks), max_b):
             x = eval_chunks[i:i + max_b]
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast("cuda", dtype=compute_dtype):
                 h = backbone(x[:, :-1], use_cache=False).last_hidden_state
             h = h.float().reshape(-1, H)
             bl, pl = head(h)
@@ -156,7 +162,7 @@ def main():
         out = []
         for i in range(0, len(eval_chunks), max_b):
             x = eval_chunks[i:i + max_b]
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast("cuda", dtype=compute_dtype):
                 lg = model(x[:, :-1], use_cache=False).logits
             out.append(F.cross_entropy(lg.float().reshape(-1, 128256),
                                        x[:, 1:].reshape(-1), reduction="none"))
@@ -199,7 +205,7 @@ def main():
         oi += args.batch
         for g, base in zip(opt.param_groups, (args.lr_backbone, args.lr_head)):
             g["lr"] = lr_at(step, base)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.autocast("cuda", dtype=compute_dtype):
             h = backbone(x[:, :-1], use_cache=False).last_hidden_state
         h = h.float().reshape(-1, H)
         bl, pl = head(h)
@@ -210,9 +216,11 @@ def main():
         ent = (pi * log_pi).sum(-1).mean()
         loss = nll + args.lambda_ent * ent
         opt.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(bb_trainable + list(head.parameters()), 1.0)
-        opt.step()
+        scaler.step(opt)
+        scaler.update()
         if step % args.log_every == 0:
             rec = {"step": step, "lr_bb": opt.param_groups[0]["lr"],
                    "nll": round(nll.item(), 4), "ent": round(ent.item(), 3),
@@ -232,7 +240,7 @@ def main():
         ids = tok(prompt, return_tensors="pt").input_ids.cuda()
         with torch.no_grad():
             for _ in range(32):
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with torch.autocast("cuda", dtype=compute_dtype):
                     h1 = backbone(ids, use_cache=False).last_hidden_state
                 h1 = h1[:, -1].float()
                 bl1, pl1 = head(h1)
