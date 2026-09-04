@@ -61,7 +61,7 @@ def main():
                          "bf16 there runs through emulation paths that NaN'd full-parameter "
                          "training within 400 warmup steps (job 524864, docs/14)")
     args = ap.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     os.makedirs(args.outdir, exist_ok=True)
     model_dir = args.model_dir or os.path.join(
         args.data_root, "LLM-Research--Llama-3.2-1B", "snapshots", "master")
@@ -112,7 +112,7 @@ def main():
     bb_trainable = [p for p in model.parameters() if p.requires_grad]
     for p in bb_trainable:  # LoRA params fp32 for Adam stability
         p.data = p.data.float()
-    print(f"backbone trainable params: {sum(p.numel() for p in bb_trainable) / 1e6:.2f}M")
+        print(f"backbone trainable params: {sum(p.numel() for p in bb_trainable) / 1e6:.2f}M")
 
     head = MoBHead(k=128, width=3072)
     head.load_state_dict(torch.load(args.head, map_location="cpu"))

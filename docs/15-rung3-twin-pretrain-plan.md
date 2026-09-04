@@ -58,6 +58,13 @@
 
 ## 7. 结果记录（待填）
 
+**实施记录**：
+- 拍板（2026-09-05）：Q1=A（h768/L12 ≈212M）、Q2=A（FineWeb 1B 缓存）、Q3=B（60k 步 ≈0.49B tokens）、Q4=A（T=1 恒定）。
+- 脚本 `scripts/p5_twin_pretrain.py` 完成（两 twin 同 seed/同数据顺序/全 fp32；NaN 规则化回滚；健康面板含 n_eff/死分量/logZ/grad-norm；unigram-kmeans 初始化）。`MoBHead` 新增 `h` 参数（旧 checkpoint 不受影响）。
+- 本地冒烟通过：native 100 步 dev NLL 7.75（随机基线 11.76）；mob 100 步 dev NLL 7.95、n_eff 79/128、dead 2、泄漏 0.6%——**附带观察：MoB twin 每步快 ~7×**（无 V 矩阵乘+softmax CE），效率优势在训练侧同样成立。
+- 集群双 job 已发：**525548（native）、525549（mob）**，60k 步 × batch 16 × 512 = 0.49B tokens，fp32，2 天限时。
+- 插曲：525020（rung-1）训练完成后在生成段悬挂（产物完整，已取消；p4 脚本 stdout 改行缓冲）。
+
 ## 8. 待拍板决策点
 
 - Q1 规模：A. h768/L12 ≈212M（推荐，判决力足）；B. h512/L8 ≈85M（更快更省，判决力弱一档）。
