@@ -98,6 +98,7 @@
 
 **升级阶梯（把路一步一步走死，全部失败才能判结构死刑）**：
 - **Rung 1（已发，job 524864）**：全参解冻末 4 层+final norm（~268M 可训），纯 MoB-NLL，骨干 2e-5 / 头 1e-5，warmup 500，20k 步恒定 LR，同 panel 协议（`p4_joint_train.py --mode unfreeze --n-layers 4`，`slurm_p4_fullft.sbatch`，outdir `runs/p4_fullft/`）。
+- **Rung 1 事故与修复（2026-09-04）**：524864 在 warmup ≤400 步即 NaN——**V100（Volta）无 bf16 硬件，bf16 走模拟路径**；v2 的 LoRA 能活下来只是因为适配器初始≈0、bf16 路径几乎没承压，全参层一进反向就炸。修复=换前 Ampere 时代的标准栈：**fp16 主干 + fp32 可训层 + autocast fp16 + GradScaler**（溢出步自动跳过；该集群 p2/p3 的 fp16 已被 29.5 万步验证）。同时顺手降半档 LR（骨干 1e-5/头 5e-6、warmup 1000）防全参初期震荡。本地 4060 冒烟通过（fp16+scaler 全链路）。**重发：job 525020**。脚本新增 `--compute-dtype {bfloat16,float16}`（bf16 仍默认，本地/新卡用）。
 - **Rung 2**：若 Rung 1 饱和 → 全 16 层+嵌入表解冻（极低 LR，~1e-5 级）。
 - **Rung 3（决定性实验）**：若 Rung 2 仍败 → 小规模从零预训练双生子（~124M 规模，BabyLM，MoB 头 vs 原生头同配方同数据对照）——"MoB 结构能否从零学会语言"的终极判决，V100 上仅数小时。
 - **续训完成（job 522720，5h12m，2026-09-03）**：peak 2e-4 × 50k 步抛光——终版验收（32,768 位置）归一化 PPL **2.00×**（26.20/13.09）、agree **0.774**（WSD 基线 2.05×/0.770）；panel 尾部仍缓升至 0.778（panel 用小子集，与 32k 位置终值有口径差）。结论：**头的容量上限基本探明**——此配方下 0.77-0.78 agree / ~2.0× PPL 即是天花板，进一步提升须换轴（数据/容量/联合优化）。产物拉回：runs/head_final_cont.pt、train_log_cont.jsonl、p3_cont_metrics.json。
