@@ -105,6 +105,7 @@ def main():
     ap.add_argument("--topk", type=int, default=1024)
     ap.add_argument("--k", type=int, default=32, help="mixture components")
     ap.add_argument("--width", type=int, default=2458, help="head MLP width")
+    ap.add_argument("--depth", type=int, default=3, help="head MLP layers")
     ap.add_argument("--lambda-ent", type=float, default=0.01)
     ap.add_argument("--daem-t0", type=float, default=2.0)
     ap.add_argument("--daem-frac", type=float, default=0.10)
@@ -207,7 +208,7 @@ def main():
         dev_h, dev_tids, dev_tps = extract(dev_chunks)
         dev_top1 = dev_tids[:, 0].clone()
 
-    head = MoBHead(k=args.k, width=args.width).cuda()
+    head = MoBHead(k=args.k, width=args.width, depth=args.depth).cuda()
     resume_state = None
     if args.resume and os.path.exists(args.resume):
         ck = torch.load(args.resume)

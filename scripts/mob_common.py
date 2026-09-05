@@ -13,14 +13,13 @@ M = 17        # code bits (ceil(log2(128256)))
 
 
 class MoBHead(nn.Module):
-    def __init__(self, k=K, width=WIDTH, h=H):
+    def __init__(self, k=K, width=WIDTH, h=H, depth=3):
         super().__init__()
         self.k = k
-        self.trunk = nn.Sequential(
-            nn.Linear(h, width), nn.SiLU(),
-            nn.Linear(width, width), nn.SiLU(),
-            nn.Linear(width, width), nn.SiLU(),
-        )
+        layers = [nn.Linear(h, width), nn.SiLU()]
+        for _ in range(depth - 1):
+            layers += [nn.Linear(width, width), nn.SiLU()]
+        self.trunk = nn.Sequential(*layers)
         self.out = nn.Linear(width, k * M + k)
         nn.init.normal_(self.out.weight, std=1e-3)
 

@@ -48,6 +48,7 @@ def main():
                     help="V100 (Volta) has no bf16 tensor cores - use float16 there")
     ap.add_argument("--k", type=int, default=32, help="mixture components (must match checkpoint)")
     ap.add_argument("--width", type=int, default=2458, help="head MLP width (must match checkpoint)")
+    ap.add_argument("--depth", type=int, default=3, help="head MLP layers (must match checkpoint)")
     ap.add_argument("--token-cache", default=None,
                     help="eval directly on this token cache (default: babylm_dev_tokens.npy)")
     ap.add_argument("--gen-tokens", type=int, default=40)
@@ -69,7 +70,7 @@ def main():
         model_dir, dtype=getattr(torch, args.backbone_dtype)).cuda()
     model.eval()
 
-    head = MoBHead(k=args.k, width=args.width).cuda()
+    head = MoBHead(k=args.k, width=args.width, depth=args.depth).cuda()
     head.load_state_dict(torch.load(args.head))
     head.eval()
 
