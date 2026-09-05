@@ -43,4 +43,4 @@
 
 ## 4. 实施记录
 
-- 2026-09-05：头规模两臂消融提交（`slurm_p2_headscale.sbatch {wide|deep}`：width 4096×3=51.4M vs depth 3072×5=51.1M，K=128，WSD 配方同 520825，1 epoch FineWeb 1B，job 号见 AGENTS.md）；`MoBHead` 新增 depth 参数（旧 checkpoint 兼容）；ECC 实验排期在两臂之后。
+- 2026-09-05：头规模两臂消融以**双联形式**提交（用户巧思：蒸馏共享冻结骨干前向）——`p2_train_dual.py`：wide 4096×3（51.4M）与 deep 3072×5（51.1M）并挂同一基座，两份优化器，**完全相同的 batch 流（配对样本，消除数据顺序方差）**，成本 ~1.2× 单跑（省 ~45%）。job **526516**，WSD 配方同 520825，1 epoch FineWeb 1B，结束自动对两臂各跑 p3_eval。`MoBHead` 新增 depth 参数（旧 checkpoint 兼容）；ECC 探索实验排在其后（码本追加校验列 + M 参数化）。
