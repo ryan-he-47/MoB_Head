@@ -60,6 +60,11 @@
 - Q2 阶段：先 50k 步探针看轨迹。
 - Q3 基建：M 参数化先行做好（代码基建一次到位），但实验不着急——本轮用 16 位跑，ECC 不入本轮。
 
+## 8. 实施记录
+
+- **基建完成（2026-09-06）**：M 参数化端到端（`MoBHead/LinearHead(m=)`、解码 m、各脚本 CB_M 从码本读取）；`build_codebook.py` 参数化（--model-dir/--out/--device/auto-M）；`--codebook/--dev-cache` 开关入 p2_train/p3_eval/p2_train_dual；**ECC 在线扩位基建**（`mob_common.ecc_parity_matrix/ecc_extend`，p2_train `--ecc-bits`——用户裁定：在线计算优于 artifact 码本；**实验冻结，等用户计划**）。
+- **SmolLM2 探针（已发预备，job 528046 on tiny）**：下载权重（HF snapshot）→ CPU 建 16 位码本（49152 词表）→ retokenize FineWeb-Edu 300k docs。探针 job（`slurm_smollm2_probe.sbatch`，50k 步 WSD 同配方 + p3_eval）因 QOS 5-job 上限暂挂，待槽位提交（依赖已备好：--dependency=afterok:528046）。
+
 ## 7. 多模型远景（用户口述 2026-09-06，记录在案）
 
 - 候选池扩展：Qwen2.5（纯文本）、Qwen3.5（多模态、智能密度高——引入多模态变量）；Gemma-2-2B 已因出身排除。
