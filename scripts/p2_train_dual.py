@@ -24,9 +24,12 @@ ARM_SETS = {
         "deep": {"type": "mob", "width": 3072, "depth": 5},
     },
     # probe set for 'is shallower actually better? — even linear?' (docs/16 Q2,
-    # user question 2026-09-06): single-hidden-layer width 1024 vs bare linear
+    # user question 2026-09-06): single-hidden-layer vs bare linear.
+    # shallow1l width = 3072 (same as the original head, depth 1 vs 3 — isolates
+    # depth alone; hidden width must exceed the 2304-dim output or it becomes a
+    # rank bottleneck of its own — user catch 2026-09-06)
     "shallow": {
-        "shallow1l": {"type": "mob", "width": 1024, "depth": 1},
+        "shallow1l": {"type": "mob", "width": 3072, "depth": 1},
         "linear": {"type": "linear"},
     },
 }
