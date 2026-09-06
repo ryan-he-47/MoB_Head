@@ -35,6 +35,8 @@ def main():
     ap.add_argument("--seq-len", type=int, default=512)
     ap.add_argument("--lr", type=float, default=6e-4)
     ap.add_argument("--warmup-frac", type=float, default=0.02)
+    ap.add_argument("--final-frac", type=float, default=0.1,
+                    help="cosine decays to this fraction of peak LR (0.02 for floor-probing)")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=922)
     ap.add_argument("--lambda-ent", type=float, default=0.01)
@@ -44,6 +46,11 @@ def main():
     ap.add_argument("--panel-every", type=int, default=2000)
     ap.add_argument("--save-every", type=int, default=5000)
     ap.add_argument("--max-chunks", type=int, default=0)
+    ap.add_argument("--resume", default=None,
+                    help="weights-only resume: latest.pt with {model[,head]}; fresh optimizer+schedule")
+    ap.add_argument("--skip-steps", type=int, default=0,
+                    help="continue the SAME seeded data permutation past the already-consumed "
+                         "prefix (skip_steps * batch chunks) — no repeats until cache exhausted")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     os.makedirs(args.outdir, exist_ok=True)
@@ -73,6 +80,14 @@ def main():
     head = None
     if args.head_type == "mob":
         head = MoBHead(k=args.k, width=args.width, h=768).cuda()
+    if args.resume:
+        ck = torch.load(os.path.join(args.resume), map_location="cpu")
+        model.load_state_dict(ck["model"])
+        if head is not None:
+            head.load_state_dict(ck["head"])
+        print(f"resumed weights from {args.resume} (step {ck['step']}); "
+              f"fresh optimizer, data offset {args.skip_steps}", flush=True)
+    if head is not None and not args.resume:
         # unigram-weighted k-means vertex init (no teacher exists from scratch):
         # sampling each first-batch target occurrence uniformly == sampling by
         # empirical frequency (docs/15 section 3)
@@ -83,6 +98,7 @@ def main():
         with torch.no_grad():
             head.out.bias.zero_()
             head.out.bias[: args.k * M] = init_logits.reshape(-1)
+    if head is not None:
         params = list(model.parameters()) + list(head.parameters())
         print(f"mob head params: {sum(p.numel() for p in head.parameters())/1e6:.1f}M", flush=True)
     else:
@@ -95,7 +111,7 @@ def main():
         if step < warmup:
             return args.lr * (step + 1) / warmup
         t = (step - warmup) / max(1, args.steps - warmup)
-        return args.lr * (0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * t)))
+        return args.lr * (args.final_frac + (1 - args.final_frac) * 0.5 * (1 + np.cos(np.pi * t)))
 
     @torch.no_grad()
     def dev_mob_nll():
@@ -146,7 +162,7 @@ def main():
     order = np.random.RandomState(args.seed).permutation(n_chunks)
     save(0)  # rollback target for the NaN rule
     t0 = time.time()
-    oi = 0
+    oi = args.skip_steps * args.batch
     nan_count = 0
     lr_scale = 1.0
     step = 0
