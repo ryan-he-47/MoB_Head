@@ -28,6 +28,22 @@ class MoBHead(nn.Module):
         return z[:, : self.k * M].view(-1, self.k, M), z[:, self.k * M :]  # bit_logits, pi_logits
 
 
+class LinearHead(nn.Module):
+    """Bare linear head: h -> k*M+k logits, no hidden layer (probe arm for the
+    'is shallower actually better?' question, docs/16 Q2). Same forward
+    signature as MoBHead so all decode/loss paths work unchanged."""
+
+    def __init__(self, k=K, h=H):
+        super().__init__()
+        self.k = k
+        self.out = nn.Linear(h, k * M + k)
+        nn.init.normal_(self.out.weight, std=1e-3)
+
+    def forward(self, h):
+        z = self.out(h)
+        return z[:, : self.k * M].view(-1, self.k, M), z[:, self.k * M :]
+
+
 def mob_mix_logprob(bit_logits, log_pi, codes):
     """log p_mix(code) for a batch of positions.
     bit_logits [n,K,M] fp32, log_pi [n,K] fp32, codes [n,k,M] fp32 (0/1).

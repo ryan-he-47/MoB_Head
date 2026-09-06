@@ -15,12 +15,20 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
-from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy
+from mob_common import H, M, MoBHead, LinearHead, mob_mix_logprob, decode_greedy
 from p2_train import kmeans_vertex_init
 
-ARMS = {
-    "wide": {"width": 4096, "depth": 3},
-    "deep": {"width": 3072, "depth": 5},
+ARM_SETS = {
+    "scale": {
+        "wide": {"type": "mob", "width": 4096, "depth": 3},
+        "deep": {"type": "mob", "width": 3072, "depth": 5},
+    },
+    # probe set for 'is shallower actually better? — even linear?' (docs/16 Q2,
+    # user question 2026-09-06): single-hidden-layer width 1024 vs bare linear
+    "shallow": {
+        "shallow1l": {"type": "mob", "width": 1024, "depth": 1},
+        "linear": {"type": "linear"},
+    },
 }
 
 
@@ -48,7 +56,9 @@ def main():
     ap.add_argument("--ckpt-keep", type=int, default=2)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-chunks", type=int, default=0)
+    ap.add_argument("--arm-set", choices=list(ARM_SETS), default="scale")
     args = ap.parse_args()
+    ARMS = ARM_SETS[args.arm_set]
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -96,7 +106,11 @@ def main():
     # two arms: heads + optimizers, identical k-means init (same seed/data)
     heads, opts = {}, {}
     for tag, cfg_arm in ARMS.items():
-        head = MoBHead(k=args.k, width=cfg_arm["width"], depth=cfg_arm["depth"]).cuda()
+        if cfg_arm.get("type") == "linear":
+            head = LinearHead(k=args.k).cuda()
+        else:
+            head = MoBHead(k=args.k, width=cfg_arm["width"],
+                           depth=cfg_arm["depth"]).cuda()
         with torch.no_grad():
             warm_chunks = torch.from_numpy(chunks[: 4 * args.batch].copy()).long().cuda()
             warm_n = min(4 * args.batch, n_chunks)
@@ -111,7 +125,9 @@ def main():
         torch.cuda.empty_cache()
         heads[tag] = head
         opts[tag] = torch.optim.AdamW(head.parameters(), lr=args.lr, weight_decay=0.0)
-        print(f"arm {tag}: width {cfg_arm['width']} depth {cfg_arm['depth']}, "
+        desc = "linear" if cfg_arm.get("type") == "linear" else \
+            f"width {cfg_arm['width']} depth {cfg_arm['depth']}"
+        print(f"arm {tag}: {desc}, "
               f"{sum(p.numel() for p in head.parameters())/1e6:.1f}M params", flush=True)
 
     steps_per_epoch = n_chunks // args.batch
