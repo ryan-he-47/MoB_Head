@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--depth", type=int, default=3, help="head MLP layers (must match checkpoint)")
     ap.add_argument("--token-cache", default=None,
                     help="eval directly on this token cache (default: babylm_dev_tokens.npy)")
+    ap.add_argument("--codebook", default="codebook.npz",
+                    help="codebook filename under <data-root>/data/")
     ap.add_argument("--gen-tokens", type=int, default=40)
     ap.add_argument("--decode", choices=["round", "mixture", "rerank"], default="round",
                     help="greedy decode path for generation samples: round = pick-component+round "
@@ -70,16 +72,18 @@ def main():
         model_dir, dtype=getattr(torch, args.backbone_dtype)).cuda()
     model.eval()
 
-    head = MoBHead(k=args.k, width=args.width, depth=args.depth).cuda()
-    head.load_state_dict(torch.load(args.head))
-    head.eval()
-
-    cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
-    codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()  # [V,17]
-    vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
+    cb = np.load(os.path.join(args.data_root, "data", args.codebook))
+    codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
+    CB_M = codes_all.shape[1]
+    vid_to_tok = torch.full((1 << CB_M,), -1, dtype=torch.long, device="cuda")
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
         torch.arange(len(cb["vertex_id"]), device="cuda")
 
+    head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
+    head.load_state_dict(torch.load(args.head))
+    head.eval()
+
+    dev_ids = None
     if args.token_cache:
         dev = np.load(args.token_cache)
     else:
@@ -118,7 +122,7 @@ def main():
                 logZs.append(torch.logsumexp(mix, dim=-1))              # [pc]
             logZ = torch.cat(logZs)
             mob_nlls.append(logZ - logp_true)
-            agrees.append(decode_greedy(bl, log_pi, vid_to_tok, codes_all) == teacher_top1)
+            agrees.append(decode_greedy(bl, log_pi, vid_to_tok, codes_all, m=CB_M) == teacher_top1)
             print(f"batch {i // args.batch + 1}/{(n_chunks + args.batch - 1) // args.batch} done")
 
     native_nll = torch.cat(native_nlls).mean().item()
@@ -154,13 +158,13 @@ def main():
             if args.decode == "rerank":
                 E = model.get_input_embeddings().weight
                 return decode_rerank_native(bl, log_pi, codes_all, E, h)[0].item()
-            return decode_greedy(bl, log_pi, vid_to_tok, codes_all)[0].item()
+            return decode_greedy(bl, log_pi, vid_to_tok, codes_all, m=CB_M)[0].item()
         probs = F.softmax(pl / tau, dim=-1)
         k = torch.multinomial(probs, 1).item()
         bits = (bl[0, k] > 0).float()
         vid = 0
-        for j in range(M):
-            vid |= bits[j].long().item() << (M - 1 - j)
+        for j in range(CB_M):
+            vid |= bits[j].long().item() << (CB_M - 1 - j)
         t = vid_to_tok[vid].item()
         if t < 0:
             d = (codes_all != bits.unsqueeze(0)).sum(-1)

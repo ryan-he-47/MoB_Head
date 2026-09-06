@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob_common import H, K, M, MoBHead, mob_mix_logprob, decode_greedy
+from mob_common import H, K, M, MoBHead, mob_mix_logprob, decode_greedy, ecc_parity_matrix, ecc_extend
 
 
 def load_or_pack_tokens(tok, data_glob, cache_path, eos_id):
@@ -137,6 +137,13 @@ def main():
     ap.add_argument("--hf-skip-docs", type=int, default=0,
                     help="training stream skips this many leading docs (set = --hf-dev-docs when --dev-format hf)")
     ap.add_argument("--token-cache", default=None, help="override token cache filename under <data-root>/data/")
+    ap.add_argument("--codebook", default="codebook.npz", help="codebook filename under <data-root>/data/")
+    ap.add_argument("--dev-cache", default="fineweb_dev_tokens.npy",
+                    help="dev token cache filename under <data-root>/data/ (hf dev-format)")
+    ap.add_argument("--ecc-bits", type=int, default=0,
+                    help=">0: online ECC extension — append this many parity bits to every "
+                         "code (deterministic XOR of data bits; INFRASTRUCTURE, experiments "
+                         "frozen per user 2026-09-06)")
     ap.add_argument("--resume", default=None)
     args = ap.parse_args()
     torch.manual_seed(args.seed)
@@ -152,11 +159,20 @@ def main():
     for p in model.parameters():
         p.requires_grad_(False)
 
-    cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
+    cb = np.load(os.path.join(args.data_root, "data", args.codebook))
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
-    vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
-    vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
-        torch.arange(len(cb["vertex_id"]), device="cuda")
+    CB_M = codes_all.shape[1]  # code length from the codebook itself (multi-model support)
+    HEAD_M = CB_M + args.ecc_bits
+    if args.ecc_bits:
+        pmat = ecc_parity_matrix(CB_M, args.ecc_bits, seed=args.seed).cuda()
+        codes_all_full = ecc_extend(codes_all, pmat)              # [V, HEAD_M]
+        vids = (codes_all_full.long()
+                * (1 << torch.arange(HEAD_M - 1, -1, -1, device="cuda")).long()).sum(-1)
+    else:
+        codes_all_full = codes_all
+        vids = torch.from_numpy(cb["vertex_id"]).long().cuda()
+    vid_to_tok = torch.full((1 << HEAD_M,), -1, dtype=torch.long, device="cuda")
+    vid_to_tok[vids] = torch.arange(codes_all_full.shape[0], device="cuda")
 
     # ---- data ----
     if args.data_format == "hf":
@@ -182,7 +198,7 @@ def main():
     # dev slice (held out) for per-epoch decode agreement
     if args.dev_format == "hf":
         dev_ids = load_or_pack_tokens_hf(
-            tok, os.path.join(args.data_root, "data", "fineweb_dev_tokens.npy"),
+            tok, os.path.join(args.data_root, "data", args.dev_cache),
             tok.eos_token_id, args.hf_dataset, args.hf_config,
             args.hf_split, args.hf_field, args.hf_dev_docs)
     else:
@@ -208,7 +224,7 @@ def main():
         dev_h, dev_tids, dev_tps = extract(dev_chunks)
         dev_top1 = dev_tids[:, 0].clone()
 
-    head = MoBHead(k=args.k, width=args.width, depth=args.depth).cuda()
+    head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=HEAD_M).cuda()
     resume_state = None
     if args.resume and os.path.exists(args.resume):
         ck = torch.load(args.resume)
@@ -227,10 +243,10 @@ def main():
             wlists = [extract(warm_chunks[i:i + args.batch])
                       for i in range(0, warm_n, args.batch)]
             init_logits = kmeans_vertex_init(
-                codes_all, torch.cat([x[1] for x in wlists]),
+                codes_all_full, torch.cat([x[1] for x in wlists]),
                 torch.cat([x[2] for x in wlists]), args.init_c, args.k, seed=args.seed)
             head.out.bias.zero_()
-            head.out.bias[: args.k * M] = init_logits.reshape(-1)
+            head.out.bias[: args.k * HEAD_M] = init_logits.reshape(-1)
         del warm_chunks, wlists
         torch.cuda.empty_cache()
 
@@ -260,9 +276,9 @@ def main():
                 bl, pl = head(dev_h[s:s + args.loss_chunk])
                 log_pi = F.log_softmax(pl, dim=-1)
                 pis.append(log_pi.exp())
-                toks = decode_greedy(bl, log_pi, vid_to_tok, codes_all)
+                toks = decode_greedy(bl, log_pi, vid_to_tok, codes_all_full, m=HEAD_M)
                 agrees.append(toks == dev_top1[s:s + args.loss_chunk])
-                codes = codes_all[dev_tids[s:s + args.loss_chunk]]
+                codes = codes_all_full[dev_tids[s:s + args.loss_chunk]]
                 mix = mob_mix_logprob(bl, log_pi, codes)
                 nlls.append(-(dev_tps[s:s + args.loss_chunk] * mix).sum(-1))
             pi_mean = torch.cat(pis).mean(0)
@@ -301,7 +317,7 @@ def main():
             for s in range(0, h.shape[0], args.loss_chunk):
                 bl, pl = head(h[s:s + args.loss_chunk])
                 log_pi = F.log_softmax(pl / temp, dim=-1)
-                codes = codes_all[tids[s:s + args.loss_chunk]]
+                codes = codes_all_full[tids[s:s + args.loss_chunk]]
                 mix = mob_mix_logprob(bl, log_pi, codes)
                 nll_parts.append(-(tps[s:s + args.loss_chunk] * mix).sum(-1))
                 pi = log_pi.exp()

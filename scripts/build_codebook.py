@@ -1,7 +1,8 @@
-# Build the semantic-binary-tree codebook for Llama-3.2-1B.
-# Recursive 2-means (cosine) bisection of the tied embedding table, 17 levels.
-# Artifacts: data/codebook.npz with codes[V,17] uint8, vertex_id[V] int32,
-# valid_vertices[2^17] bool, depth_reached[V] uint8, plus validation report.
+# Build the semantic-binary-tree codebook for a model's embedding table.
+# Recursive 2-means (cosine) bisection, ceil(log2(V)) levels.
+# Artifacts: <out>.npz with codes[V,M] uint8, vertex_id[V] int32,
+# valid_vertices[2^M] bool, depth_reached[V] uint8, plus validation report.
+import argparse
 import json
 import time
 
@@ -9,11 +10,18 @@ import numpy as np
 import torch
 from safetensors import safe_open
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
-OUT_NPZ = r"E:\Trash_things\llm_codec\data\codebook.npz"
-OUT_META = r"E:\Trash_things\llm_codec\data\codebook_meta.json"
-M = 17
-SEED = 42
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--model-dir", default=r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master")
+_ap.add_argument("--out-npz", default=r"E:\Trash_things\llm_codec\data\codebook.npz")
+_ap.add_argument("--out-meta", default=r"E:\Trash_things\llm_codec\data\codebook_meta.json")
+_ap.add_argument("--seed", type=int, default=42)
+_ap.add_argument("--device", default="cuda", help="'cuda' or 'cpu' (prep jobs on CPU nodes)")
+_args = _ap.parse_args()
+MODEL_DIR = _args.model_dir
+OUT_NPZ = _args.out_npz
+OUT_META = _args.out_meta
+SEED = _args.seed
+DEVICE = _args.device
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -24,7 +32,7 @@ def load_embeddings():
         key = [k for k in f.keys() if "embed_tokens" in k]
         assert len(key) == 1, f"unexpected embed keys: {key}"
         w = f.get_tensor(key[0])
-    e = w.to(torch.float32).cuda()
+    e = w.to(torch.float32).to(DEVICE)
     e = e / e.norm(dim=1, keepdim=True).clamp_min(1e-8)
     print(f"embeddings: {tuple(e.shape)} (key={key[0]})")
     return e
@@ -127,7 +135,7 @@ def pack_vertex_id(codes):
 def validate(e, codes, vid):
     v = codes.shape[0]
     assert len(np.unique(vid)) == v, "vertex ids not unique!"
-    print("uniqueness: OK (all 128256 vertices distinct)")
+    print(f"uniqueness: OK (all {v} vertices distinct)")
 
     ham = codes  # already a 0/1 bit array [V, M]
     n_pairs = 200_000
@@ -137,7 +145,7 @@ def validate(e, codes, vid):
     keep = a != b
     a, b = a[keep], b[keep]
     ham_d = (ham[a] != ham[b]).sum(1)
-    cos_d = 1 - (e[torch.from_numpy(a).cuda()] * e[torch.from_numpy(b).cuda()]).sum(1).cpu().numpy()
+    cos_d = 1 - (e[torch.from_numpy(a).to(DEVICE)] * e[torch.from_numpy(b).to(DEVICE)]).sum(1).cpu().numpy()
     r_tree = np.corrcoef(ham_d, cos_d)[0, 1]
 
     # random codebook control
@@ -148,7 +156,7 @@ def validate(e, codes, vid):
 
     # true nearest neighbor hamming distance
     n_probe = 500
-    probe = torch.from_numpy(g.integers(0, v, n_probe)).cuda()
+    probe = torch.from_numpy(g.integers(0, v, n_probe)).to(DEVICE)
     sims = e[probe] @ e.T
     sims[torch.arange(n_probe), probe] = -1
     nn = sims.argmax(1).cpu().numpy()
@@ -164,6 +172,9 @@ def validate(e, codes, vid):
 
 def main():
     e = load_embeddings()
+    global M
+    M = int(np.ceil(np.log2(e.shape[0])))  # code length from vocab size
+    print(f"vocab {e.shape[0]} -> M={M} bits")
     codes, depth_reached, stats = build(e)
     vid = pack_vertex_id(codes)
     valid = np.zeros(1 << M, dtype=bool)
@@ -178,8 +189,8 @@ def main():
         depth_reached=depth_reached,
     )
     meta = {
-        "model": "Llama-3.2-1B (ModelScope LLM-Research mirror)",
-        "method": "recursive 2-means (cosine) bisection of tied embedding table",
+        "model": MODEL_DIR,
+        "method": "recursive 2-means (cosine) bisection of embedding table",
         "M": M, "seed": SEED, "vocab": int(codes.shape[0]),
         "build_stats": stats, "validation": report,
     }

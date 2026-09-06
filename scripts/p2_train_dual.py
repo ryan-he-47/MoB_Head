@@ -60,6 +60,7 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-chunks", type=int, default=0)
     ap.add_argument("--arm-set", choices=list(ARM_SETS), default="scale")
+    ap.add_argument("--codebook", default="codebook.npz", help="codebook filename under <data-root>/data/")
     args = ap.parse_args()
     ARMS = ARM_SETS[args.arm_set]
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
@@ -74,9 +75,10 @@ def main():
     for p in model.parameters():
         p.requires_grad_(False)
 
-    cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
+    cb = np.load(os.path.join(args.data_root, "data", args.codebook))
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
-    vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
+    CB_M = codes_all.shape[1]
+    vid_to_tok = torch.full((1 << CB_M,), -1, dtype=torch.long, device="cuda")
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
         torch.arange(len(cb["vertex_id"]), device="cuda")
 
@@ -110,10 +112,10 @@ def main():
     heads, opts = {}, {}
     for tag, cfg_arm in ARMS.items():
         if cfg_arm.get("type") == "linear":
-            head = LinearHead(k=args.k).cuda()
+            head = LinearHead(k=args.k, m=CB_M).cuda()
         else:
             head = MoBHead(k=args.k, width=cfg_arm["width"],
-                           depth=cfg_arm["depth"]).cuda()
+                           depth=cfg_arm["depth"], m=CB_M).cuda()
         with torch.no_grad():
             warm_chunks = torch.from_numpy(chunks[: 4 * args.batch].copy()).long().cuda()
             warm_n = min(4 * args.batch, n_chunks)
@@ -123,7 +125,7 @@ def main():
                 codes_all, torch.cat([x[1] for x in wlists]),
                 torch.cat([x[2] for x in wlists]), args.init_c, args.k, seed=args.seed)
             head.out.bias.zero_()
-            head.out.bias[: args.k * M] = init_logits.reshape(-1)
+            head.out.bias[: args.k * CB_M] = init_logits.reshape(-1)
         del warm_chunks, wlists
         torch.cuda.empty_cache()
         heads[tag] = head
@@ -152,7 +154,7 @@ def main():
         for s in range(0, dev_h.shape[0], args.loss_chunk):
             bl, pl = head(dev_h[s:s + args.loss_chunk])
             log_pi = F.log_softmax(pl, dim=-1)
-            toks = decode_greedy(bl, log_pi, vid_to_tok, codes_all)
+            toks = decode_greedy(bl, log_pi, vid_to_tok, codes_all, m=CB_M)
             agrees.append(toks == dev_top1[s:s + args.loss_chunk])
             pi = log_pi.exp()
             pis.append(pi.mean(0))

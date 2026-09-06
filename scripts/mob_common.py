@@ -13,35 +13,52 @@ M = 17        # code bits (ceil(log2(128256)))
 
 
 class MoBHead(nn.Module):
-    def __init__(self, k=K, width=WIDTH, h=H, depth=3):
+    def __init__(self, k=K, width=WIDTH, h=H, depth=3, m=M):
         super().__init__()
         self.k = k
+        self.m = m
         layers = [nn.Linear(h, width), nn.SiLU()]
         for _ in range(depth - 1):
             layers += [nn.Linear(width, width), nn.SiLU()]
         self.trunk = nn.Sequential(*layers)
-        self.out = nn.Linear(width, k * M + k)
+        self.out = nn.Linear(width, k * m + k)
         nn.init.normal_(self.out.weight, std=1e-3)
 
     def forward(self, h):
         z = self.out(self.trunk(h))
-        return z[:, : self.k * M].view(-1, self.k, M), z[:, self.k * M :]  # bit_logits, pi_logits
+        return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]  # bit_logits, pi_logits
 
 
 class LinearHead(nn.Module):
-    """Bare linear head: h -> k*M+k logits, no hidden layer (probe arm for the
+    """Bare linear head: h -> k*m+k logits, no hidden layer (probe arm for the
     'is shallower actually better?' question, docs/16 Q2). Same forward
     signature as MoBHead so all decode/loss paths work unchanged."""
 
-    def __init__(self, k=K, h=H):
+    def __init__(self, k=K, h=H, m=M):
         super().__init__()
         self.k = k
-        self.out = nn.Linear(h, k * M + k)
+        self.m = m
+        self.out = nn.Linear(h, k * m + k)
         nn.init.normal_(self.out.weight, std=1e-3)
 
     def forward(self, h):
         z = self.out(h)
-        return z[:, : self.k * M].view(-1, self.k, M), z[:, self.k * M :]
+        return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]
+
+
+def ecc_parity_matrix(m, p, seed=123, device="cpu"):
+    """Fixed random linear parity-check matrix [p, m] over GF(2) for the ECC
+    extension (INFRASTRUCTURE ONLY, experiments frozen per user 2026-09-06).
+    Each parity bit = XOR of a random ~half subset of the m data bits."""
+    g = torch.Generator().manual_seed(seed)
+    return (torch.rand((p, m), generator=g, device=device) < 0.5).float()
+
+
+def ecc_extend(codes, pmat):
+    """codes [..., M] (0/1) -> [..., M+P] by appending parity bits computed
+    online from the parity matrix (deterministic given the data bits)."""
+    par = (codes @ pmat.T) % 2
+    return torch.cat([codes, par], dim=-1)
 
 
 def mob_mix_logprob(bit_logits, log_pi, codes):
@@ -54,16 +71,16 @@ def mob_mix_logprob(bit_logits, log_pi, codes):
     return torch.logsumexp(log_pi.unsqueeze(1) + comp, dim=-1)
 
 
-def decode_greedy(bit_logits, log_pi, vid_to_tok, codes_all):
+def decode_greedy(bit_logits, log_pi, vid_to_tok, codes_all, m=M):
     """argmax-pi component + per-bit rounding -> token id. Returns [n] long.
-    Falls back to the nearest valid vertex (Hamming) if rounding lands on one
-    of the 2816 unused vertices (spec: docs/03 section 4.5)."""
+    Falls back to the nearest valid vertex (Hamming) if rounding lands on an
+    unused vertex (spec: docs/03 section 4.5). m = code length in bits."""
     ks = log_pi.argmax(-1)
     bl = bit_logits[torch.arange(ks.numel(), device=bit_logits.device), ks]
-    bits = (bl > 0).float()                                    # [n, M]
+    bits = (bl > 0).float()                                    # [n, m]
     vids = torch.zeros(ks.numel(), dtype=torch.long, device=bit_logits.device)
-    for j in range(M):
-        vids |= bits[:, j].long() << (M - 1 - j)
+    for j in range(m):
+        vids |= bits[:, j].long() << (m - 1 - j)
     toks = vid_to_tok[vids]
     bad = toks < 0
     if bad.any():
@@ -131,9 +148,10 @@ def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
     needs vid_to_tok, n==1 only). E [V,H] any dtype, h [n,H]. Returns [n] long."""
     if proposal == "round":
         assert bit_logits.shape[0] == 1 and vid_to_tok is not None
+        m = bit_logits.shape[-1]
         ktop = log_pi[0].topk(min(topn, bit_logits.shape[1])).indices      # [n32]
-        bits = (bit_logits[0][ktop] > 0).long()                            # [n32,M]
-        shifts = (1 << torch.arange(M - 1, -1, -1, device=bits.device)).long()
+        bits = (bit_logits[0][ktop] > 0).long()                            # [n32,m]
+        shifts = (1 << torch.arange(m - 1, -1, -1, device=bits.device)).long()
         cand = vid_to_tok[(bits * shifts).sum(-1)]
         cand = cand[cand >= 0].unique()                                    # dedup, drop invalid
         scores = h[0].to(E.dtype) @ E[cand].T                              # [<=n32]
