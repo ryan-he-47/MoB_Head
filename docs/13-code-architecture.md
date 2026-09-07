@@ -94,7 +94,59 @@ HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼
 9. **2-means 直接二分在窄锥嵌入上退化**：必须用"方向+中位数平衡切分"（docs/04 §3.1）。
 10. **--max-chunks 小于 4×batch 时 warm-up 初始化会切出空批次**：已修（`warm_n` 守卫），改这块代码时注意保持。
 
-## 7. 扩展指引
+## 7. 2026-09-07 大归档增补（解码体系/多模型/新脚本/新坑）
+
+### 8.1 mob_common.py 现状（头族 + 解码族 + 基建）
+- **常量**：`H=2048, WIDTH=2458, K=32, M=17`（M 现为**默认**值，全部类/函数支持 `m=` 参数；各脚本从码本读 `CB_M = codes.shape[1]`）。
+- **头族**（统一 forward 签名：返回 `(bit_logits [n,k,m], pi_logits [n,k])`）：
+  - `MoBHead(k, width, h=2048, depth=3, m=17)`——主线头，3 层 SiLU MLP（`depth` 可变）。
+  - `LinearHead(k, h, m)`——纯线性探针头（已判死：-27pt）。
+  - `RMSNorm(d)`——RMS 归一。
+  - `ResMLPHead(k, width, h, depth=5, m)`——pre-norm RMSNorm + 残差 + 终 norm（三头赛马臂 2）。
+  - `SwiGLUHead(k, h, hidden=7300, m, blocks=1)`——h→hidden→h 的 SwiGLU FFN（臂 3；`blocks>1` 残差堆叠）。
+- **解码族**：
+  - `mob_mix_logprob`——对数混合概率（全 fp32，免 exp 恒等式不变）。
+  - `mixture_vertex_logprob(bit_logits, log_pi, codes_all) -> [n,V]`——全合法顶点对数混合概率；n==1 走 [V,m+1]@[m+1,K] GEMM 快路。
+  - `mixture_topk(bit_logits, log_pi, codes_all, topn)`——**界剪枝精确 top-k**（L=max_k A ≤ log p ≤ L+log K，幸存者才做精确 logsumexp；与全排名逐位相同）。
+  - `decode_greedy(..., m=)`——选分量+逐位取整（旧主线，带 Hamming 回退）。
+  - `decode_mixture_argmax(...)`——全顶点混合概率 argmax（主线档）。
+  - `decode_rerank_native(..., E, h, topn=32, proposal={"mixture","round","roundflip","adaptive"}, vid_to_tok, adaptive_kwargs)`——级联重排：提议+嵌入表行 gather 精确重打分。**roundflip（当前最优，v3 默认 aug_topn=32/per_comp_cap=8/α=0.15）**：众数优先+全分量小额翻转对冲，召回 96.5%/重排 96.5%/hit8 100%，零码本 GEMM。
+  - `propose_adaptive(...)`（v2 版：分量硬下限 floor + 优先级序生成；当前为研究留档，头进化后复评）、`propose_roundflip(...)`。
+- **ECC 基建（实验冻结）**：`ecc_parity_matrix(m,p,seed)` + `ecc_extend(codes,pmat)`；p2_train `--ecc-bits` 在线扩位。
+- **多模型基建**：`--codebook/--dev-cache` 开关（p2_train/p3_eval/p2_train_dual）；`build_codebook.py` 参数化（`--model-dir/--out-npz/--out-meta/--seed/--device`，M=ceil(log2 V) 自动，分片安全 glob 加载）。
+
+### 8.2 脚本清单（新增）
+| 脚本 | 作用 |
+|---|---|
+| `p2_train_dual.py` | 双臂蒸馏共享冻结基座（配对 batch 流；`--arm-set {scale,shallow}`，易扩到 3+ 头赛马） |
+| `p4_backbone_probe.py` | 解冻可行性探针（纯 MoB-NLL 训骨干；--mode unfreeze/lora；--freeze-head/--norm-trainable） |
+| `p4_joint_train.py` | 集群联合微调（LoRA/全参末 N 层+norm；`--resume-adapter/--schedule/--compute-dtype fp16+GradScaler`） |
+| `p4_leakage_check.py` | 未用顶点泄漏测量（logZ=合法顶点质量） |
+| `p5_twin_pretrain.py` | 从零双生子预训练（212M Llama-mini ×2；fp32；NaN 回滚规则；`--resume/--skip-steps/--final-frac`） |
+| `p7_lr_scan.py` | 本地 LR 舒适度扫描（断点续跑：每单元一结果 JSON，重启跳过；runs/lr_scan/） |
+| `p8_eval_adaptive.py` | 自适应提议评估（网格+round32 基线+翻转补丁臂，env 变量调补丁参数） |
+| `analyze_p5_twins.py` | 双生子曲线对比（CPU）+出图 |
+| `analyze_headscale.py` | 双联臂 vs 原版 WSD 同步位对照 |
+| `plot_wsd_curve.py` | WSD vs 余弦训练曲线图 |
+| `eval_rerank_gen_ppl.py` | 各解码路径生成文本的原生头 PPL |
+| `eval_topk_recall.py` | 语义评估：recall/覆盖率/命中率/例外分析/round 提议/mass32 |
+
+### 8.3 sbatch 清单
+`slurm_train_fwe{,_long,_wsd,_cont}.sbatch`（蒸馏系）、`slurm_p2_headscale_dual.sbatch`、`slurm_p2_shallow_dual.sbatch`、`slurm_p4_joint.sbatch`、`slurm_p4_polish.sbatch`、`slurm_p4_fullft.sbatch`、`slurm_p5_twin{,_cont}.sbatch`（$1=native|mob）、`slurm_smollm2_prep.sbatch`（tiny 预备）、`slurm_smollm2_probe.sbatch`。**全部模板必须带 `#SBATCH --exclude=gpu-v100s-06`**。
+
+### 8.4 新坑增补（编号续 §6）
+11. **V100 的 bf16 全参训练 NaN**：Volta 无 bf16 硬件走模拟路径，全参反向即炸（LoRA 因适配器≈0 幸存）；集群训练一律 **fp16 主干 + fp32 可训参数 + autocast fp16 + GradScaler**（溢出步自动跳过），还比 bf16 模拟快 ~4×。
+12. **bf16 全顶点 logits 并列**：原生 top-2 精确并列率 4.83%，"召回-一致率缺口"全是并列假象（docs/09 §6.1）。
+13. **edit 工具吞换行**：oldString 带行尾换行、newString 不带 → 下一行被粘到上行造成语法错误；编辑后必须编译检查。
+14. **PowerShell `-c` 内联 Python 引号被吞**：含双引号/f-string 的内联脚本必炸——一律写临时 .py 或用 edit 工具。
+15. **`if ($?)` 链在 python 写 stderr 时断**：stderr 进度条会让 `$?` 变 False，后续命令不执行——长链用 `;` 分隔。
+16. **集群 .git 丢失修复**：重克隆到 /tmp → 移植 .git → `git checkout -- .`（缓存/权重是 gitignored 不受影响）。
+17. **QOS 5-job 上限**：提交报 `QOSMaxSubmitJobPerUserLimit` 就是满了，等槽位。
+18. **peft 包装后骨干访问路径**：`model.get_base_model().model`（直接 `model.model` 拿到的是整个 CausalLM）。
+19. **`torch.load(weights_only)` 警告**：集群 transformers/torch 新版默认会翻转——老脚本注意兼容。
+20. **k-means init 只覆盖 bias 的 bit 部分**：`head.out.bias[:k*CB_M]`（ECC 时扩到 `k*HEAD_M`，扩位码本参与 init）。
+
+## 8. 扩展指引
 
 - **换容量**：`--k/--width`（+ 评测脚本同步）；K=128 时 n_eff 只有 ~74-89，提示分量数可能偏多，升 K 前先看 n_eff。
 - **换数据**：`--data-format hf --hf-dataset ...`（或写好新的文本目录 loader）；dev 集用 `--dev-format` 对齐分布。
