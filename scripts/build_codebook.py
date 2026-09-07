@@ -3,7 +3,9 @@
 # Artifacts: <out>.npz with codes[V,M] uint8, vertex_id[V] int32,
 # valid_vertices[2^M] bool, depth_reached[V] uint8, plus validation report.
 import argparse
+import glob
 import json
+import os
 import time
 
 import numpy as np
@@ -28,13 +30,21 @@ np.random.seed(SEED)
 
 
 def load_embeddings():
-    with safe_open(MODEL_DIR + r"\model.safetensors", framework="pt") as f:
-        key = [k for k in f.keys() if "embed_tokens" in k]
-        assert len(key) == 1, f"unexpected embed keys: {key}"
-        w = f.get_tensor(key[0])
+    files = sorted(glob.glob(os.path.join(MODEL_DIR, "*.safetensors")))
+    assert files, f"no safetensors under {MODEL_DIR}"
+    key, path = None, None
+    for p in files:
+        with safe_open(p, framework="pt") as f:
+            ks = [k for k in f.keys() if "embed_tokens" in k]
+        if ks:
+            key, path = ks[0], p
+            break
+    assert key, f"no embed_tokens key in {files}"
+    with safe_open(path, framework="pt") as f:
+        w = f.get_tensor(key)
     e = w.to(torch.float32).to(DEVICE)
     e = e / e.norm(dim=1, keepdim=True).clamp_min(1e-8)
-    print(f"embeddings: {tuple(e.shape)} (key={key[0]})")
+    print(f"embeddings: {tuple(e.shape)} (key={key}, shard={os.path.basename(path)})")
     return e
 
 
