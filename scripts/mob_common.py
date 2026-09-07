@@ -29,6 +29,69 @@ class MoBHead(nn.Module):
         return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]  # bit_logits, pi_logits
 
 
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-6):
+        super().__init__()
+        self.w = nn.Parameter(torch.ones(d))
+        self.eps = eps
+
+    def forward(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.w
+
+
+class ResMLPHead(nn.Module):
+    """Residual MLP head: pre-norm (RMSNorm) Linear-SiLU blocks with residual
+    adds + final norm before readout — the modern gradient-flow upgrade for
+    the deep-head route (docs/16 §5, user route 1). Same forward signature."""
+
+    def __init__(self, k=K, width=WIDTH, h=H, depth=5, m=M):
+        super().__init__()
+        self.k, self.m = k, m
+        self.inp = nn.Linear(h, width)
+        self.blocks = nn.ModuleList([
+            nn.ModuleDict({"norm": RMSNorm(width), "fc": nn.Linear(width, width)})
+            for _ in range(depth - 1)
+        ])
+        self.final_norm = RMSNorm(width)
+        self.out = nn.Linear(width, k * m + k)
+        nn.init.normal_(self.out.weight, std=1e-3)
+
+    def forward(self, h):
+        x = self.inp(h)
+        for b in self.blocks:
+            x = x + b["fc"](F.silu(b["norm"](x)))
+        z = self.out(self.final_norm(x))
+        return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]
+
+
+class SwiGLUHead(nn.Module):
+    """SwiGLU head — the same FFN family as the LLM's own layers
+    (docs/16 §5, user route 2): per block W3(SiLU(xW1) (xW2)) mapping
+    h -> hidden -> h, no bias; blocks>1 stacks with residual. Same forward
+    signature as MoBHead."""
+
+    def __init__(self, k=K, h=H, hidden=7300, m=M, blocks=1):
+        super().__init__()
+        self.k, self.m = k, m
+        self.blocks = nn.ModuleList()
+        for _ in range(blocks):
+            self.blocks.append(nn.ModuleDict({
+                "w1": nn.Linear(h, hidden, bias=False),
+                "w2": nn.Linear(h, hidden, bias=False),
+                "w3": nn.Linear(hidden, h, bias=False),
+            }))
+        self.out = nn.Linear(h, k * m + k)
+        nn.init.normal_(self.out.weight, std=1e-3)
+
+    def forward(self, h):
+        x = h
+        for i, b in enumerate(self.blocks):
+            y = b["w3"](F.silu(b["w1"](x)) * b["w2"](x))
+            x = x + y if i > 0 else y
+        z = self.out(x)
+        return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]
+
+
 class LinearHead(nn.Module):
     """Bare linear head: h -> k*m+k logits, no hidden layer (probe arm for the
     'is shallower actually better?' question, docs/16 Q2). Same forward

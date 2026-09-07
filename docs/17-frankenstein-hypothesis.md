@@ -64,6 +64,7 @@
 
 - **基建完成（2026-09-06）**：M 参数化端到端（`MoBHead/LinearHead(m=)`、解码 m、各脚本 CB_M 从码本读取）；`build_codebook.py` 参数化（--model-dir/--out/--device/auto-M）；`--codebook/--dev-cache` 开关入 p2_train/p3_eval/p2_train_dual；**ECC 在线扩位基建**（`mob_common.ecc_parity_matrix/ecc_extend`，p2_train `--ecc-bits`——用户裁定：在线计算优于 artifact 码本；**实验冻结，等用户计划**）。
 - **SmolLM2 探针（已发预备，job 528046 on tiny）**：下载权重（HF snapshot）→ CPU 建 16 位码本（49152 词表）→ retokenize FineWeb-Edu 300k docs。探针 job（`slurm_smollm2_probe.sbatch`，50k 步 WSD 同配方 + p3_eval）因 QOS 5-job 上限暂挂，待槽位提交（依赖已备好：--dependency=afterok:528046）。
+- **预备完成（530685，~6 min，缓存命中）**：首次提交（528046）因 build_codebook 的 Windows 反斜杠+分片加载崩溃，已修为 shard-safe glob 加载；权重 `models/SmolLM2-1.7B`、码本 `data/codebook_smollm2.npz`（16 位）、缓存 `data/fineweb_smollm2_{train,dev}_tokens.npy`（312.5M tokens）全部就位。**探针已发：job 530750**（50k 步 WSD + p3_eval）。三头赛马（docs/16 §5）待本地 LR 扫描收官后接替。
 
 ## 7. 多模型远景（用户口述 2026-09-06，记录在案）
 
