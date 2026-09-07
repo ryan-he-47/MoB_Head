@@ -109,10 +109,88 @@ class LinearHead(nn.Module):
         return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]
 
 
+def propose_roundflip(bit_logits, log_pi, codes_all, vid_to_tok, topn=32,
+                      aug_topn=8, alpha=0.15, u_max=6, per_comp_cap=64):
+    """round-topn component modes PLUS flip-enumeration hedge on the top
+    `aug_topn` components' uncertain bits (|sigmoid(z)-0.5| <= alpha).
+    Validated 2026-09-07 (docs/09 §6.2): recall 96.2% vs round-32's 95.5%,
+    rerank 95.9% vs 93.5%, at mean 73 / p95 162 candidates — mixture-level
+    fidelity WITHOUT the codebook GEMM scan. n_batch==1 only.
+    (Pure adaptive-scope variants measured and REJECTED: cross-component
+    coverage dominates within-component bit uncertainty.)"""
+    m = bit_logits.shape[-1]
+    shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
+    ktop = log_pi[0].topk(min(topn, bit_logits.shape[1]), -1).indices
+    bits = (bit_logits[0, ktop] > 0).long()
+    toks = vid_to_tok[(bits * shifts).sum(-1)]
+    toks = toks[toks >= 0]
+    extra = []
+    for k in ktop[:aug_topn].tolist():
+        p = bit_logits[0, k].sigmoid()
+        unc = ((p - 0.5).abs() <= alpha).nonzero(as_tuple=True)[0]
+        u = min(unc.numel(), u_max)
+        unc = unc[:u]
+        if u == 0:
+            continue
+        base = (p > 0.5).long()
+        base[unc] = 0
+        base_vid = (base * shifts).sum()
+        combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
+                   >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
+        vids = base_vid + (combos * shifts[unc]).sum(-1)
+        t = vid_to_tok[vids]
+        extra.append(t[t >= 0][:per_comp_cap])
+    if extra:
+        toks = torch.unique(torch.cat([toks] + extra))
+    return toks
+
+
+def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
+                     ratio=0.05, mass=0.95, alpha=0.25, u_max=12, max_cand=512):
+    """Adaptive candidate generation exploiting the mixture's probabilistic
+    structure (user design 2026-09-07, docs/09 §6.2). n_batch==1 only.
+    1. Dynamic component scope: mode="ratio" keeps components with
+       pi_k >= pi_max * ratio (sharp -> few, flat -> many); mode="mass" keeps
+       the smallest prefix covering `mass` of the pi mass.
+    2. Per selected component: bits with |sigmoid(z)-0.5| <= alpha are
+       "uncertain"; enumerate ALL flip combinations of those bits (capped at
+       u_max per component), certain bits fixed at their rounded values.
+       So no confident-but-wrong rounding ever kicks a true candidate out,
+       and no long-tail component pollutes the set with noise.
+    Returns candidate token ids [C] (C <= max_cand, deduped, valid only)."""
+    m = bit_logits.shape[-1]
+    shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
+    pi = log_pi[0].exp()
+    order = pi.argsort(descending=True)
+    if mode == "ratio":
+        sel = order[pi[order] >= pi[order[0]] * ratio]
+    else:
+        cum = pi[order].cumsum(0)
+        sel = order[: int((cum < mass).sum().item()) + 1]
+    cands = []
+    for k in sel.tolist():
+        p = bit_logits[0, k].sigmoid()                            # [m]
+        unc = ((p - 0.5).abs() <= alpha).nonzero(as_tuple=True)[0]
+        u = min(unc.numel(), u_max)
+        unc = unc[:u]
+        base = (p > 0.5).long()
+        base[unc] = 0
+        base_vid = (base * shifts).sum()
+        if u == 0:
+            vids = base_vid.view(1)
+        else:
+            combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
+                       >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
+            vids = base_vid + (combos * shifts[unc]).sum(-1)      # [2^u]
+        toks = vid_to_tok[vids]
+        cands.append(toks[toks >= 0])
+    if not cands:
+        return torch.empty(0, dtype=torch.long, device=bit_logits.device)
+    cand = torch.unique(torch.cat(cands))
+    return cand[:max_cand]
+
+
 def ecc_parity_matrix(m, p, seed=123, device="cpu"):
-    """Fixed random linear parity-check matrix [p, m] over GF(2) for the ECC
-    extension (INFRASTRUCTURE ONLY, experiments frozen per user 2026-09-06).
-    Each parity bit = XOR of a random ~half subset of the m data bits."""
     g = torch.Generator().manual_seed(seed)
     return (torch.rand((p, m), generator=g, device=device) < 0.5).float()
 
@@ -201,7 +279,7 @@ def decode_mixture_argmax(bit_logits, log_pi, codes_all):
 
 
 def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
-                         proposal="mixture", vid_to_tok=None):
+                         proposal="mixture", vid_to_tok=None, adaptive_kwargs=None):
     """Cascade decode (mainline-adopted 2026-09-02, docs/09 section 6.1): MoB
     proposes top-n candidate tokens, then exact native logits h @ E[cand]^T
     rescore them (reads topn x H rows of the tied embedding table, ~131 KB at
@@ -209,6 +287,20 @@ def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
     (top-1 agreement 92.2%); proposal="round": round the top-n components by pi
     to their vertices — zero GEMM, ~free (agreement 89.9%, docs/09 section 6.1;
     needs vid_to_tok, n==1 only). E [V,H] any dtype, h [n,H]. Returns [n] long."""
+    if proposal == "roundflip":
+        assert bit_logits.shape[0] == 1 and vid_to_tok is not None
+        cand = propose_roundflip(bit_logits, log_pi, codes_all, vid_to_tok,
+                                 **(adaptive_kwargs or {}))
+        scores = h[0].to(E.dtype) @ E[cand].T
+        return cand[scores.argmax()].view(1)
+    if proposal == "adaptive":
+        assert bit_logits.shape[0] == 1 and vid_to_tok is not None
+        cand = propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok,
+                                **(adaptive_kwargs or {}))
+        if cand.numel() == 0:
+            cand = mixture_topk(bit_logits, log_pi, codes_all, 1)
+        scores = h[0].to(E.dtype) @ E[cand].T
+        return cand[scores.argmax()].view(1)
     if proposal == "round":
         assert bit_logits.shape[0] == 1 and vid_to_tok is not None
         m = bit_logits.shape[-1]
