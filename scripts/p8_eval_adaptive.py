@@ -16,10 +16,10 @@ from transformers import AutoModelForCausalLM
 from mob_common import H, MoBHead, propose_adaptive
 
 GRID = [
-    {"mode": "ratio", "ratio": 0.05, "alpha": 0.25},
-    {"mode": "ratio", "ratio": 0.10, "alpha": 0.25},
-    {"mode": "mass", "mass": 0.95, "alpha": 0.25},
-    {"mode": "mass", "mass": 0.90, "alpha": 0.20},
+    {"mode": "ratio", "ratio": 0.05, "alpha": 0.15, "floor": 32},
+    {"mode": "ratio", "ratio": 0.05, "alpha": 0.25, "floor": 32},
+    {"mode": "ratio", "ratio": 0.10, "alpha": 0.15, "floor": 32},
+    {"mode": "mass", "mass": 0.95, "alpha": 0.15, "floor": 32},
 ]
 
 
@@ -84,7 +84,11 @@ def main():
 
     # augmentation variant: round-32 PLUS flip-enumeration of the top-8
     # components' uncertain bits (the salvageable core of the adaptive idea)
-    AUG_ALPHA, AUG_UMAX, AUG_PERCOMP = 0.15, 6, 64
+    import os as _os
+    AUG_ALPHA = float(_os.environ.get("AUG_ALPHA", "0.15"))
+    AUG_UMAX = int(_os.environ.get("AUG_UMAX", "6"))
+    AUG_PERCOMP = int(_os.environ.get("AUG_PERCOMP", "64"))
+    AUG_TOPN = int(_os.environ.get("AUG_TOPN", "8"))
     aug = {"recall": 0.0, "hit8": 0.0, "hit4": 0.0, "rerank": 0.0}
     aug_counts = []
     for i in range(hs.shape[0]):
@@ -95,7 +99,7 @@ def main():
         toks = vid_to_tok[(bits * shifts).sum(-1)]
         toks = toks[toks >= 0]
         extra = []
-        for k in ktop[:8].tolist():
+        for k in ktop[:AUG_TOPN].tolist():
             p = bl[0, k].sigmoid()
             unc = ((p - 0.5).abs() <= AUG_ALPHA).nonzero(as_tuple=True)[0]
             u = min(unc.numel(), AUG_UMAX)
@@ -125,7 +129,8 @@ def main():
     for k in aug:
         aug[k] /= hs.shape[0]
     c = np.array(aug_counts)
-    results["round32_plus_flips"] = {**aug, "alpha": AUG_ALPHA,
+    results["round32_plus_flips"] = {**aug, "alpha": AUG_ALPHA, "aug_topn": AUG_TOPN,
+                                     "per_comp_cap": AUG_PERCOMP,
                                      "cand_mean": float(c.mean()),
                                      "cand_p95": float(np.percentile(c, 95))}
     print(f"augment done: {results['round32_plus_flips']}", flush=True)

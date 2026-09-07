@@ -110,14 +110,15 @@ class LinearHead(nn.Module):
 
 
 def propose_roundflip(bit_logits, log_pi, codes_all, vid_to_tok, topn=32,
-                      aug_topn=8, alpha=0.15, u_max=6, per_comp_cap=64):
+                      aug_topn=32, alpha=0.15, u_max=6, per_comp_cap=8):
     """round-topn component modes PLUS flip-enumeration hedge on the top
     `aug_topn` components' uncertain bits (|sigmoid(z)-0.5| <= alpha).
-    Validated 2026-09-07 (docs/09 §6.2): recall 96.2% vs round-32's 95.5%,
-    rerank 95.9% vs 93.5%, at mean 73 / p95 162 candidates — mixture-level
-    fidelity WITHOUT the codebook GEMM scan. n_batch==1 only.
-    (Pure adaptive-scope variants measured and REJECTED: cross-component
-    coverage dominates within-component bit uncertainty.)"""
+    Validated 2026-09-07 (docs/09 §6.2): with aug_topn=32/per_comp_cap=8
+    ("diversity first, hedge second, every component a small budget") it
+    beats all measured variants — recall 96.5%, hit@top8 100%, rerank 96.5%
+    at mean 81 / p95 122 candidates, NO codebook GEMM. n_batch==1 only.
+    (Pure adaptive-scope variants and flip-clouds-before-modes orderings
+    measured and rejected: cross-component coverage must come first.)"""
     m = bit_logits.shape[-1]
     shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
     ktop = log_pi[0].topk(min(topn, bit_logits.shape[1]), -1).indices
@@ -146,28 +147,33 @@ def propose_roundflip(bit_logits, log_pi, codes_all, vid_to_tok, topn=32,
 
 
 def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
-                     ratio=0.05, mass=0.95, alpha=0.25, u_max=12, max_cand=512):
+                     ratio=0.05, mass=0.95, alpha=0.25, u_max=12, max_cand=512,
+                     floor=0):
     """Adaptive candidate generation exploiting the mixture's probabilistic
     structure (user design 2026-09-07, docs/09 §6.2). n_batch==1 only.
     1. Dynamic component scope: mode="ratio" keeps components with
        pi_k >= pi_max * ratio (sharp -> few, flat -> many); mode="mass" keeps
-       the smallest prefix covering `mass` of the pi mass.
+       the smallest prefix covering `mass` of the pi mass. `floor` forces at
+       least that many components (v2: never starve cross-component coverage).
     2. Per selected component: bits with |sigmoid(z)-0.5| <= alpha are
        "uncertain"; enumerate ALL flip combinations of those bits (capped at
        u_max per component), certain bits fixed at their rounded values.
-       So no confident-but-wrong rounding ever kicks a true candidate out,
-       and no long-tail component pollutes the set with noise.
+    v2 ordering fix: candidates are emitted in PRIORITY order (components by
+    pi desc, within a component by ascending flip count), dedup keeps the
+    first (highest-priority) occurrence, and emission stops at max_cand —
+    no arbitrary token-id-sorted truncation (the v1 recall-killer).
     Returns candidate token ids [C] (C <= max_cand, deduped, valid only)."""
     m = bit_logits.shape[-1]
     shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
     pi = log_pi[0].exp()
     order = pi.argsort(descending=True)
     if mode == "ratio":
-        sel = order[pi[order] >= pi[order[0]] * ratio]
+        n_sel = max(int((pi[order] >= pi[order[0]] * ratio).sum().item()), floor)
     else:
-        cum = pi[order].cumsum(0)
-        sel = order[: int((cum < mass).sum().item()) + 1]
-    cands = []
+        n_sel = max(int((pi[order].cumsum(0) < mass).sum().item()) + 1, floor)
+    sel = order[:n_sel]
+    seen = torch.zeros(1 << m, dtype=torch.bool, device=bit_logits.device)
+    cands, total = [], 0
     for k in sel.tolist():
         p = bit_logits[0, k].sigmoid()                            # [m]
         unc = ((p - 0.5).abs() <= alpha).nonzero(as_tuple=True)[0]
@@ -181,13 +187,21 @@ def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
         else:
             combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
                        >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
-            vids = base_vid + (combos * shifts[unc]).sum(-1)      # [2^u]
+            hw = combos.sum(-1).argsort()                        # fewer flips first
+            vids = (base_vid + (combos[hw] * shifts[unc]).sum(-1))
         toks = vid_to_tok[vids]
-        cands.append(toks[toks >= 0])
+        toks = toks[toks >= 0]
+        new = toks[~seen[toks]]
+        seen[new] = True
+        take = min(new.numel(), max_cand - total)
+        if take > 0:
+            cands.append(new[:take])
+            total += take
+        if total >= max_cand:
+            break
     if not cands:
         return torch.empty(0, dtype=torch.long, device=bit_logits.device)
-    cand = torch.unique(torch.cat(cands))
-    return cand[:max_cand]
+    return torch.cat(cands)
 
 
 def ecc_parity_matrix(m, p, seed=123, device="cpu"):
