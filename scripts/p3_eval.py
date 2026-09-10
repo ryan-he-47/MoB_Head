@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob_common import H, M, MoBHead, mob_mix_logprob, decode_greedy, decode_mixture_argmax, decode_rerank_native
+from mob_common import H, M, MoBHead, ResMLPHead, SwiGLUHead, mob_mix_logprob, decode_greedy, decode_mixture_argmax, decode_rerank_native
 
 
 def load_tokens(tok, data_glob, cache_path, eos_id):
@@ -49,6 +49,10 @@ def main():
     ap.add_argument("--k", type=int, default=32, help="mixture components (must match checkpoint)")
     ap.add_argument("--width", type=int, default=2458, help="head MLP width (must match checkpoint)")
     ap.add_argument("--depth", type=int, default=3, help="head MLP layers (must match checkpoint)")
+    ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob",
+                    help="head architecture (must match checkpoint)")
+    ap.add_argument("--hidden", type=int, default=7300, help="swiglu FFN hidden width")
+    ap.add_argument("--blocks", type=int, default=1, help="swiglu block count")
     ap.add_argument("--token-cache", default=None,
                     help="eval directly on this token cache (default: babylm_dev_tokens.npy)")
     ap.add_argument("--codebook", default="codebook.npz",
@@ -79,7 +83,12 @@ def main():
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
         torch.arange(len(cb["vertex_id"]), device="cuda")
 
-    head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
+    if args.head_type == "resmlp":
+        head = ResMLPHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
+    elif args.head_type == "swiglu":
+        head = SwiGLUHead(k=args.k, hidden=args.hidden, blocks=args.blocks, m=CB_M).cuda()
+    else:
+        head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
     head.load_state_dict(torch.load(args.head))
     head.eval()
 

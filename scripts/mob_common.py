@@ -65,10 +65,12 @@ class ResMLPHead(nn.Module):
 
 
 class SwiGLUHead(nn.Module):
-    """SwiGLU head — the same FFN family as the LLM's own layers
-    (docs/16 §5, user route 2): per block W3(SiLU(xW1) (xW2)) mapping
-    h -> hidden -> h, no bias; blocks>1 stacks with residual. Same forward
-    signature as MoBHead."""
+    """SwiGLU head -- the same FFN family as the LLM's own layers
+    (docs/16 §5, user route 2): per block x + W3(SiLU(x_n W1) * (x_n W2))
+    with x_n = RMSNorm(x) -- pre-norm + residual on EVERY block, final norm
+    before readout (fixed 2026-09-09: the original had no norms and no
+    residual on block 0, which made high-LR instability a foregone
+    conclusion and invalidated the first LR scan). Same forward signature."""
 
     def __init__(self, k=K, h=H, hidden=7300, m=M, blocks=1):
         super().__init__()
@@ -76,19 +78,21 @@ class SwiGLUHead(nn.Module):
         self.blocks = nn.ModuleList()
         for _ in range(blocks):
             self.blocks.append(nn.ModuleDict({
+                "norm": RMSNorm(h),
                 "w1": nn.Linear(h, hidden, bias=False),
                 "w2": nn.Linear(h, hidden, bias=False),
                 "w3": nn.Linear(hidden, h, bias=False),
             }))
+        self.final_norm = RMSNorm(h)
         self.out = nn.Linear(h, k * m + k)
         nn.init.normal_(self.out.weight, std=1e-3)
 
     def forward(self, h):
         x = h
-        for i, b in enumerate(self.blocks):
-            y = b["w3"](F.silu(b["w1"](x)) * b["w2"](x))
-            x = x + y if i > 0 else y
-        z = self.out(x)
+        for b in self.blocks:
+            xn = b["norm"](x)
+            x = x + b["w3"](F.silu(b["w1"](xn)) * b["w2"](xn))
+        z = self.out(self.final_norm(x))
         return z[:, : self.k * self.m].view(-1, self.k, self.m), z[:, self.k * self.m :]
 
 

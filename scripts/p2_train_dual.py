@@ -6,6 +6,7 @@
 # variance in the comparison). Recipe = the proven WSD one (job 520825).
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -15,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
-from mob_common import H, M, MoBHead, LinearHead, mob_mix_logprob, decode_greedy
+from mob_common import H, M, MoBHead, LinearHead, ResMLPHead, SwiGLUHead, mob_mix_logprob, decode_greedy
 from p2_train import kmeans_vertex_init
 
 ARM_SETS = {
@@ -31,6 +32,16 @@ ARM_SETS = {
     "shallow": {
         "shallow1l": {"type": "mob", "width": 3072, "depth": 1},
         "linear": {"type": "linear"},
+    },
+    # three-head race on SmolLM2 (docs/16 §5, user design 2026-09-07; COSINE per
+    # user ruling 2026-09-09 — fixed-budget runs get a full-length decay tail,
+    # no constant-LR plateau). Per-arm peaks from the local LR-comfort scan
+    # (p7_lr_scan.py); swiglu peak is the fixed-head re-probe's output (override
+    # with --peaks swiglu=... without touching code).
+    "race3": {
+        "control": {"type": "mob", "width": 3072, "depth": 3, "peak": 7e-4},
+        "resmlp": {"type": "resmlp", "width": 3072, "depth": 5, "peak": 7e-4},
+        "swiglu": {"type": "swiglu", "hidden": 7300, "blocks": 1, "peak": 3e-4},
     },
 }
 
@@ -48,6 +59,9 @@ def main():
     ap.add_argument("--lr", type=float, default=7e-4)
     ap.add_argument("--warmup", type=int, default=2500)
     ap.add_argument("--decay-frac", type=float, default=0.35)
+    ap.add_argument("--schedule", choices=["wsd", "cosine"], default="wsd")
+    ap.add_argument("--peaks", default="",
+                    help="per-arm peak override, e.g. control=7e-4,swiglu=5e-4")
     ap.add_argument("--topk", type=int, default=1024)
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--lambda-ent", type=float, default=0.01)
@@ -63,6 +77,12 @@ def main():
     ap.add_argument("--codebook", default="codebook.npz", help="codebook filename under <data-root>/data/")
     args = ap.parse_args()
     ARMS = ARM_SETS[args.arm_set]
+    # per-arm LR peaks: ARM_SET defaults, overridable via --peaks tag=value,...
+    PEAKS = {tag: float(cfg.get("peak", args.lr)) for tag, cfg in ARMS.items()}
+    for kv in args.peaks.split(","):
+        if "=" in kv:
+            _tag, _v = kv.split("=")
+            PEAKS[_tag.strip()] = float(_v)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -113,6 +133,12 @@ def main():
     for tag, cfg_arm in ARMS.items():
         if cfg_arm.get("type") == "linear":
             head = LinearHead(k=args.k, m=CB_M).cuda()
+        elif cfg_arm.get("type") == "resmlp":
+            head = ResMLPHead(k=args.k, width=cfg_arm["width"],
+                              depth=cfg_arm["depth"], m=CB_M).cuda()
+        elif cfg_arm.get("type") == "swiglu":
+            head = SwiGLUHead(k=args.k, hidden=cfg_arm["hidden"],
+                              blocks=cfg_arm.get("blocks", 1), m=CB_M).cuda()
         else:
             head = MoBHead(k=args.k, width=cfg_arm["width"],
                            depth=cfg_arm["depth"], m=CB_M).cuda()
@@ -129,24 +155,34 @@ def main():
         del warm_chunks, wlists
         torch.cuda.empty_cache()
         heads[tag] = head
-        opts[tag] = torch.optim.AdamW(head.parameters(), lr=args.lr, weight_decay=0.0)
-        desc = "linear" if cfg_arm.get("type") == "linear" else \
-            f"width {cfg_arm['width']} depth {cfg_arm['depth']}"
-        print(f"arm {tag}: {desc}, "
+        opts[tag] = torch.optim.AdamW(head.parameters(), lr=PEAKS[tag], weight_decay=0.0)
+        if cfg_arm.get("type") == "linear":
+            desc = "linear"
+        elif cfg_arm.get("type") == "resmlp":
+            desc = f"resmlp width {cfg_arm['width']} depth {cfg_arm['depth']}"
+        elif cfg_arm.get("type") == "swiglu":
+            desc = f"swiglu hidden {cfg_arm['hidden']} blocks {cfg_arm.get('blocks', 1)}"
+        else:
+            desc = f"width {cfg_arm['width']} depth {cfg_arm['depth']}"
+        print(f"arm {tag}: {desc}, peak {PEAKS[tag]:.2e}, "
               f"{sum(p.numel() for p in head.parameters())/1e6:.1f}M params", flush=True)
 
     steps_per_epoch = n_chunks // args.batch
     total_steps = steps_per_epoch * args.epochs
 
-    def lr_at(step):
+    def lr_at(step, peak):
         if step < args.warmup:
-            return args.lr * (step + 1) / args.warmup
+            return peak * (step + 1) / args.warmup
         t = (step - args.warmup) / max(1, total_steps - args.warmup)
+        if args.schedule == "cosine":
+            # warmup -> cosine decay to 0.1x peak (fixed-budget runs: the whole
+            # run is one long polishing tail, no constant-LR plateau)
+            return peak * (0.1 + 0.45 * (1.0 + math.cos(math.pi * t)))
         decay_start = 1.0 - args.decay_frac
         if t < decay_start:
-            return args.lr
+            return peak
         u = (t - decay_start) / args.decay_frac
-        return args.lr * (0.1 + 0.9 * (1.0 - u))
+        return peak * (0.1 + 0.9 * (1.0 - u))
 
     @torch.no_grad()
     def dev_metrics(head):
@@ -183,7 +219,7 @@ def main():
             losses = {}
             for tag in ARMS:
                 for g in opts[tag].param_groups:
-                    g["lr"] = lr_at(step)
+                    g["lr"] = lr_at(step, PEAKS[tag])
                 nll_parts, ent_parts = [], []
                 for s in range(0, h.shape[0], args.loss_chunk):
                     bl, pl = heads[tag](h[s:s + args.loss_chunk])
@@ -204,9 +240,9 @@ def main():
                 run[tag][0] += nll.item()
                 run[tag][1] += 1
             if step % args.log_every == 0:
-                rec = {"step": step, "lr": lr_at(step),
-                       "elapsed_s": int(time.time() - t0)}
+                rec = {"step": step, "elapsed_s": int(time.time() - t0)}
                 for tag in ARMS:
+                    rec[f"lr_{tag}"] = lr_at(step, PEAKS[tag])
                     rec[f"nll_{tag}"] = round(run[tag][0] / max(1, run[tag][1]), 4)
                     run[tag] = [0.0, 0]
                 print(json.dumps(rec), flush=True)
