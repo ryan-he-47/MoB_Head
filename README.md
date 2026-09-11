@@ -52,7 +52,11 @@ The architecture also makes the vocab interface fully symmetric and code-driven:
 ## Repository layout
 
 ```
-scripts/            # all code (train/eval/analysis/cluster jobs) — see docs/13
+mob/                # model source: heads (MoB/Linear/ResMLP/SwiGLU), losses, all decode paths
+train/              # training entry points (distill single/dual, joint-FT, twin pretrain, LR scan)
+eval/               # acceptance eval, recall/rerank evals, benchmarks, analysis scripts
+tools/              # codebook builders, token-cache builders, smoke tests
+slurm/              # all cluster job templates (.sbatch)
 data/               # codebook.npz, token caches, BabyLM 2023
 docs/               # full documentation (design, logs, reports) — see below
 runs/               # checkpoints, train logs, eval metrics
@@ -77,12 +81,13 @@ AGENTS.md           # project conventions and current state (for AI agents)
 pip install torch transformers numpy safetensors datasets
 # backbone: Llama-3.2-1B at ./LLM-Research--Llama-3.2-1B/snapshots/master
 # (HF gated; any mirror works, e.g. ModelScope LLM-Research/Llama-3.2-1B)
+# all entry points run as modules from the repo root:
 
-python scripts/smoke_test.py                     # sanity: loads, tied embeddings, lm_head input point
-python scripts/build_codebook.py                 # build the semantic binary-tree codebook -> data/codebook.npz
-python scripts/p2_train.py --epochs 3 --batch 8  # distill the MoB head (BabyLM-10M default)
-python scripts/p3_eval.py --head runs/p2_10m/head_final.pt   # normalized PPL vs native + generations
-python scripts/benchmark_decode.py               # inference speed/bandwidth benchmark
+python -m tools.smoke_test                     # sanity: loads, tied embeddings, lm_head input point
+python -m tools.build_codebook                 # build the semantic binary-tree codebook -> data/codebook.npz
+python -m train.p2_train --epochs 3 --batch 8  # distill the MoB head (BabyLM-10M default)
+python -m eval.p3_eval --head runs/p2_10m/head_final.pt   # normalized PPL vs native + generations
+python -m eval.benchmark_decode                # inference speed/bandwidth benchmark
 ```
 
 ## License & citation

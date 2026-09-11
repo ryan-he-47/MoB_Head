@@ -4,22 +4,30 @@
 
 ## 0. 仓库布局
 
+**2026-09-11 重组（用户要求）**：`scripts/` 平铺结构废除，按职责分四目录 + slurm。**全部入口以模块形式从仓库根运行**（`python -m train.p2_train ...`，不要 `python train/p2_train.py`——包导入依赖根目录在 sys.path 上）。旧文档/日志里的 `scripts/X.py` 路径按 `X.py` 的归属目录心算映射即可。
+
 ```
 llm_codec/
+├── mob/         # 模型源码：mob_common.py（头族 MoB/Linear/ResMLP/SwiGLU、损失、全部解码路径、ECC 基建）
+├── train/       # 训练入口：p2_train.py（单头蒸馏）、p2_train_dual.py（多臂共享基座）、p4_joint_train.py、
+│                #   p4_backbone_probe.py、p5_twin_pretrain.py、p7_lr_scan.py、train_encoder.py（已终止）、p1_smoke.py
+├── eval/        # 评测与分析：p3_eval.py（验收）、eval_topk_recall.py、eval_rerank_gen_ppl.py、p8_eval_adaptive.py、
+│                #   p4_leakage_check.py、analyze_*.py、plot_*.py、benchmark_decode.py、gen_samples.py、measure_*.py
+├── tools/       # 一次性工具：build_codebook.py、build_fineweb_cache.py、smoke_test.py、dump_lr_scan.py 等
+├── slurm/       # 全部集群作业模板（.sbatch）
 ├── LLM-Research--Llama-3.2-1B/snapshots/master/   # 冻结骨干（魔搭镜像，bf16 safetensors 2.47GB + tokenizer）
 ├── data/
-│   ├── codebook.npz / codebook_meta.json          # 语义二叉树码本 + 元数据
+│   ├── codebook.npz / codebook_meta.json / codebook_smollm2.npz   # 语义二叉树码本 + 元数据
 │   ├── babylm_data/                               # BabyLM 2023 原始文本（10M/100M/dev/test）
 │   ├── *_tokens.npy                               # int32 token 缓存（babylm_10m / babylm_dev / fineweb_*）
-├── scripts/                                       # 全部代码（无包结构，脚本间用同目录 import）
 ├── runs/                                          # 训练/评测产物（checkpoint、train_log.jsonl、metrics）
 ├── docs/                                          # 全部文档（编号递进）
 └── AGENTS.md                                      # 项目级指令源
 ```
 
-本地环境：conda env `cose2`（`E:\MiniConda\envs\cose2\python.exe`，conda 不在 PATH 上，直接调 env 内 python）。集群：burgundy.hpc.cityu.edu.hk:22，远端根目录 `/gpfs1/home/yihe47/llm_codec`，python 在 `/home/yihe47/miniconda3/envs/cose2/bin/python`。
+包机制：四个代码目录各带空 `__init__.py`；跨目录引用一律绝对导入（`from mob.mob_common import ...`、`from train.p2_train import kmeans_vertex_init`）。本地环境：conda env `cose2`（`E:\MiniConda\envs\cose2\python.exe`，conda 不在 PATH 上，直接调 env 内 python）。集群：burgundy.hpc.cityu.edu.hk:22，远端根目录 `/gpfs1/home/yihe47/llm_codec`，python 在 `/home/yihe47/miniconda3/envs/cose2/bin/python`——集群同样 `cd` 到仓库根后 `$PY -m train.xxx`。
 
-## 1. 核心库：`scripts/mob_common.py`
+## 1. 核心库：`mob/mob_common.py`
 
 共享的 MoB 头定义与全部数值核心。常量 `H=2048, WIDTH=2458, K=32, M=17`（M 永远 17；K/WIDTH 是旧默认——新代码一律走构造参数）。
 
@@ -27,7 +35,7 @@ llm_codec/
 - `mob_mix_logprob(bit_logits, log_pi, codes) -> [n,k]`：对数混合概率。核心恒等式 `log Bern(c;z) = c·z + logsigmoid(−z)`（z 是 bit-logit）——免 exp、免溢出；`einsum("nkm,njm->nkj", codes, bit_logits)` + `logsigmoid(−z).sum(M)` 得分量对数概率，再 `logsumexp(log_pi + comp, dim=K)`。**全部 fp32，别放进 autocast**。
 - `decode_greedy(bit_logits, log_pi, vid_to_tok, codes_all) -> token ids`：argmax π → 逐位取整 → 打包顶点 id → `vid_to_tok` 查表；落空（2816 个空余顶点之一）时对该位置做全表 Hamming 最近邻（`codes_all != bits` 求和取 argmin）。
 
-## 2. 生产训练：`scripts/p2_train.py`
+## 2. 生产训练：`train/p2_train.py`
 
 ### 数据流
 ```
@@ -53,7 +61,7 @@ llm_codec/
 
 HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼接 + int32 缓存；`--hf-skip-docs N` 跳过流前 N 篇（训练集）；`--dev-format hf` 时 dev = 流的前 `--hf-dev-docs` 篇（缓存 `fineweb_dev_tokens.npy`）——**二者错开无泄漏**。计算节点无外网时：登录节点预下载 HF 数据集，作业内 `HF_HUB_OFFLINE=1`。
 
-## 3. 验收评测：`scripts/p3_eval.py`
+## 3. 验收评测：`eval/p3_eval.py`
 
 - **归一化 PPL**：p(t) = exp(mix_logprob(c_t) − logZ)，logZ = 对全部 128256 个合法顶点求 mix_logprob 的 logsumexp（按 `--pos-chunk 64` 分块，[64, V, K] 张量）。native 侧 = 标准 CE（同位置同骨干）。
 - 还输出：top-1 一致率、生成样本（贪心 + τ=0.7/1.0 + 教师贪心对照）→ `generations.txt`。

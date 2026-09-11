@@ -75,4 +75,5 @@ Core design (agreed with the user; decisions logged in `docs/03-experiment-plan.
 - Ask the user about anything unclear in definitions or direction instead of guessing.
 - All plans, reports, and design/construction docs are archived as Markdown files in `docs/` (single shared folder, e.g. `docs/01-experiment-plan.md`).
 - **Docs-first rule: before ANY development work, read the relevant docs/ first (methodology `docs/11`, code architecture `docs/13`, current state in AGENTS.md). When any development work is completed, the wrap-up MUST update or add docs/ entries.**
+- **Repo layout (2026-09-11 reorg, user request):** code lives in `mob/` (model source: mob_common.py), `train/` (training entry points), `eval/` (eval/analysis), `tools/` (one-off builders/smoke tests), `slurm/` (.sbatch templates) — each a package; **run everything as modules from the repo root** (`python -m train.p2_train ...`), never `python train/p2_train.py`. Older docs/log entries saying `scripts/X.py` are historical — map by filename to the new dirs.
 - This file is the only instruction source; keep it updated as decisions are made.
