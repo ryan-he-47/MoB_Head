@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
-from mob.mob_common import H, MoBHead, propose_adaptive
+from mob.mob_common import H, MoBHead, ResMLPHead, SwiGLUHead, propose_adaptive
 
 GRID = [
     {"mode": "ratio", "ratio": 0.05, "alpha": 0.15, "floor": 32},
@@ -29,33 +29,48 @@ def main():
     ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_final_wsd.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
+    ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
+    ap.add_argument("--depth", type=int, default=3)
+    ap.add_argument("--hidden", type=int, default=7300)
+    ap.add_argument("--blocks", type=int, default=1)
+    ap.add_argument("--model-dir", default=None)
+    ap.add_argument("--codebook", default="codebook.npz")
+    ap.add_argument("--dev-cache", default="fineweb_dev_tokens.npy")
     ap.add_argument("--n-pos", type=int, default=2048)
     ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\p8_adaptive_eval.json")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
-    model = AutoModelForCausalLM.from_pretrained(
-        os.path.join(args.data_root, "LLM-Research--Llama-3.2-1B", "snapshots", "master"),
-        dtype=torch.bfloat16).cuda().eval()
-    head = MoBHead(k=args.k, width=args.width)
-    head.load_state_dict(torch.load(args.head, map_location="cpu"))
-    head = head.cuda().float().eval()
-    cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
+    model_dir = args.model_dir or os.path.join(
+        args.data_root, "LLM-Research--Llama-3.2-1B", "snapshots", "master")
+    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16).cuda().eval()
+    cb = np.load(os.path.join(args.data_root, "data", args.codebook))
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
     CB_M = codes_all.shape[1]
+    if args.head_type == "resmlp":
+        head = ResMLPHead(k=args.k, width=args.width, depth=args.depth, m=CB_M)
+    elif args.head_type == "swiglu":
+        head = SwiGLUHead(k=args.k, hidden=args.hidden, blocks=args.blocks, m=CB_M)
+    else:
+        head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=CB_M)
+    head.load_state_dict(torch.load(args.head, map_location="cpu"))
+    head = head.cuda().float().eval()
+    codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
     vid_to_tok = torch.full((1 << CB_M,), -1, dtype=torch.long, device="cuda")
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
         torch.arange(len(cb["vertex_id"]), device="cuda")
     E = model.get_input_embeddings().weight
 
-    dev = np.load(os.path.join(args.data_root, "data", "fineweb_dev_tokens.npy"))
+    dev = np.load(os.path.join(args.data_root, "data", args.dev_cache))
     T = 512
     n_ch = args.n_pos // T
     chunks = torch.from_numpy(dev[: n_ch * (T + 1)].reshape(n_ch, T + 1).copy()).long().cuda()
     with torch.no_grad():
         out = model(chunks[:, :-1], output_hidden_states=True)
         hs = out.hidden_states[-1].float().reshape(-1, H)
-        logits = out.logits.float().reshape(-1, 128256)
+        logits = out.logits.float()
+    V = logits.shape[-1]
+    logits = logits.reshape(-1, V)
     nat_top1 = logits.argmax(-1)
     nat_top8 = logits.topk(8, -1).indices
 

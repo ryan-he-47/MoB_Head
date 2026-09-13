@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob.mob_common import H, M, MoBHead
+from mob.mob_common import H, M, MoBHead, ResMLPHead, SwiGLUHead
 
 
 def main():
@@ -21,6 +21,14 @@ def main():
     ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
+    ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
+    ap.add_argument("--depth", type=int, default=3)
+    ap.add_argument("--hidden", type=int, default=7300)
+    ap.add_argument("--blocks", type=int, default=1)
+    ap.add_argument("--model-dir", default=None)
+    ap.add_argument("--codebook", default="codebook.npz")
+    ap.add_argument("--dev-cache", default="fineweb_dev_tokens.npy")
+    ap.add_argument("--backbone-dtype", default="bfloat16")
     ap.add_argument("--n-chunks", type=int, default=32)
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--pos-chunk", type=int, default=16,
@@ -29,19 +37,26 @@ def main():
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    model_dir = os.path.join(args.data_root, "LLM-Research--Llama-3.2-1B", "snapshots", "master")
+    model_dir = args.model_dir or os.path.join(args.data_root, "LLM-Research--Llama-3.2-1B", "snapshots", "master")
     tok = AutoTokenizer.from_pretrained(model_dir)
-    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16).cuda().eval()
-    head = MoBHead(k=args.k, width=args.width).cuda()
-    head.load_state_dict(torch.load(args.head))
-    head.eval()
-    cb = np.load(os.path.join(args.data_root, "data", "codebook.npz"))
-    codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()  # [V,17]
-    vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir, dtype=getattr(torch, args.backbone_dtype)).cuda().eval()
+    cb = np.load(os.path.join(args.data_root, "data", args.codebook))
+    codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()  # [V,CB_M]
+    CB_M = codes_all.shape[1]
+    vid_to_tok = torch.full((1 << CB_M,), -1, dtype=torch.long, device="cuda")
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
         torch.arange(len(cb["vertex_id"]), device="cuda")
+    if args.head_type == "resmlp":
+        head = ResMLPHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
+    elif args.head_type == "swiglu":
+        head = SwiGLUHead(k=args.k, hidden=args.hidden, blocks=args.blocks, m=CB_M).cuda()
+    else:
+        head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=CB_M).cuda()
+    head.load_state_dict(torch.load(args.head))
+    head.eval()
 
-    dev = np.load(os.path.join(args.data_root, "data", "fineweb_dev_tokens.npy"))
+    dev = np.load(os.path.join(args.data_root, "data", args.dev_cache))
     T = 512
     n_chunks = min(args.n_chunks, len(dev) // (T + 1))
     chunks = torch.from_numpy(dev[: n_chunks * (T + 1)].reshape(n_chunks, T + 1).copy()).long().cuda()
@@ -103,8 +118,8 @@ def main():
                 # per-bit — zero GEMM. Good enough as the cascade proposal?
                 bl_c = bl[s:s + args.pos_chunk]
                 ktop = log_pi[s:s + args.pos_chunk].topk(32, -1).indices         # [pc,32]
-                bits_c = bl_c.gather(1, ktop.unsqueeze(-1).expand(-1, -1, M)) > 0
-                shifts = (1 << torch.arange(M - 1, -1, -1, device="cuda")).long()
+                bits_c = bl_c.gather(1, ktop.unsqueeze(-1).expand(-1, -1, CB_M)) > 0
+                shifts = (1 << torch.arange(CB_M - 1, -1, -1, device="cuda")).long()
                 toks_c = vid_to_tok[(bits_c.long() * shifts).sum(-1)]            # [pc,32], -1 invalid
                 nat1_c = nat_top1[s:s + args.pos_chunk]
                 t8_c = nat_top8[s:s + args.pos_chunk]

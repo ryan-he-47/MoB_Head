@@ -1,6 +1,6 @@
 # MoB_Head: Distilling LLM unembedding into a Mixture-of-Bernoullis head over semantic binary codes
 
-> **Research prototype — minimal implementation closed the loop end-to-end (2026-09-02).** Codebook → distillation → three decode paths → CPU/GPU benchmarks, all measured on real checkpoints. Final large-scale acceptance numbers are landing (see [Status](#status)).
+> **Race3 milestone (2026-09-13): best head = SwiGLU-MoB — normalized PPL 1.78× vs native on SmolLM2-1.7B, cascade top-1 fidelity 96.5%, candidate-set hit@top8 100%.** Three-architecture race + full fidelity/efficiency re-benchmark complete (see [Status](#status) and `docs/20`).
 
 ## What is this?
 
@@ -9,24 +9,25 @@ Small LLMs pay a heavy per-token cost at the output layer: every decode step mul
 This project replaces the unembedding layer with a compact **Mixture of factorized Bernoullis (MoB)** head over **17-bit binary codes**:
 
 1. **Semantic binary tree codebook** — each vocab token gets a 17-bit code (a vertex of the 17-dim unit hypercube), assigned by a balanced spectral-style binary tree over the model's own embedding table, so nearby codes are semantically close.
-2. **MoB head** — a small MLP (3 layers, SiLU) maps the backbone's hidden state to K mixture components of per-bit Bernoulli logits + mixture weights. Trained by **exact weighted-expectation distillation** from the frozen teacher's top-1024 next-token distribution. No sampling, no noise, no V-dim anything.
-3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax; exact bound-pruned ranking via `mixture_topk`). A cascade mode (mainline) rescores the MoB top-32 proposals with 32 rows of the tied embedding table (top-1 fidelity 92.2% vs native, ~131 KB/step) — see `docs/09` §6.1.
+2. **MoB head** — a small network maps the backbone's hidden state to K mixture components of per-bit Bernoulli logits + mixture weights. **Architecture matters**: a three-way race (2026-09-13, SmolLM2-1.7B, per-arm cosine LR schedules, 228k steps) put a pre-norm **SwiGLU head** (1.78× normalized PPL) and a pre-norm **5-layer residual head** (1.90×) far ahead of the original 3-layer MLP (2.41×). Trained by **exact weighted-expectation distillation** from the frozen teacher's top-1024 next-token distribution. No sampling, no noise, no V-dim anything.
+3. **Decoding** — rank all valid vertices by full mixture probability and take the argmax (mixture-argmax; no h×V matmul, no V-length softmax; exact bound-pruned ranking via `mixture_topk`). A cascade mode (mainline) rescores MoB proposals with a few rows of the tied embedding table. Proposal flavors: `round` (top-32 component modes, zero GEMM, fastest), `roundflip` (modes + uncertain-bit flip hedge, ~36 candidates, recall 97.3%), `adaptive` (dynamic component scope, recall ceiling 98.1%) — see `docs/09` §6.1-6.2 and `docs/20` §3.
 
-### Decode fidelity (WSD K=128 final head, 1B-token run; FineWeb-Edu dev)
+### Decode fidelity (SwiGLU-MoB head, SmolLM2-1.7B; FineWeb-Edu dev, 16,384 positions)
 
-| Decode path | top-1 agreement vs native | step latency (GPU / CPU) |
+| Decode path | top-1 agreement vs native | notes |
 |---|---|---|
-| component pick + round (early) | 0.770 | 1.76 ms / 5.45 ms |
-| mixture-argmax (mainline) | 0.798 | 2.72 ms / 20.3 ms |
-| cascade rerank, round proposal (mainline, efficiency mode) | **0.922** | **1.14 ms / 6.42 ms** |
-| cascade rerank, mixture proposal (mainline, fidelity mode) | **0.938** | 2.76 ms / 22.4 ms |
-| native lm_head + softmax (reference) | 1.000 | 2.43 ms / 41.2 ms |
+| component pick + round (early) | 0.805 | cheapest |
+| mixture-argmax (recall@1) | 0.829 | full-vertex ranking GEMM |
+| cascade rerank, round proposal | 0.951 | zero-GEMM proposal |
+| cascade rerank, roundflip proposal | **0.969** | ~36 candidates, no GEMM |
+| cascade rerank, mixture proposal | 0.965 | exact ranking |
+| native lm_head + softmax (reference) | 1.000 | — |
 
-Candidate-set quality (MoB top-32, 16,384 dev positions): recall of the native top-1 **95.7%**; catches ≥1 of the native top-8 on **99.9%** of positions, ≥1 of the native top-4 on **99.7%**. Of the 4.3% top-1 misses, **98.2%** still land on a native top-8 token. The 32 candidates carry **80.3%** of the native distribution's probability mass. Cascade generations score **PPL 2.27 under the native head** vs native greedy's own 2.35 — statistically indistinguishable (`docs/09` §6).
-
-Honest boundary: the full-distribution gap is narrowed but not closed — normalized PPL of the MoB mixture vs native is **2.05×** on the final WSD head (cosine run: 3.05×), and the training curve was still rising at termination (`docs/09` §6). The cascade closes *decode* fidelity; the density gap is the training-side frontier.
+Candidate-set quality: MoB top-32 recalls the native top-1 on **97.8%** of positions; catches ≥1 of the native top-8 on **99.97%**; the 32 candidates carry **85.6%** of the native distribution's probability mass. Misses degrade gracefully to the teacher's 2nd–8th choice. Full-distribution density: normalized PPL **1.78×** vs native (was 2.05× on the Llama line's best head — different vocab size, not directly comparable).
 
 ## Why it's interesting
+
+The head-level win scales with vocabulary size. On **Llama-3.2-1B (V=128,256)** with the 32M-param head:
 
 | | native lm_head + softmax | MoB head (K=32) | MoB head (K=128) |
 |---|---|---|---|
@@ -37,17 +38,19 @@ Honest boundary: the full-distribution gap is narrowed but not closed — normal
 | + cascade decode step, CPU batch 1 | 41.2 ms | — | **27.6 ms (1.5×)** |
 | + cascade decode step, GPU batch 1 | 2.43 ms | — | 2.56 ms (parity) |
 
-The cascade's exact all-vertex ranking is a bound-pruned `[V,18]@[18,K]` GEMM (≈0.59 GFLOP — FLOP-comparable to the native matvec, but it reads only the codebook: 8.7 MB fp32, 0.3 MB bit-packable — vs the 501 MiB table) plus a 131 KB row gather; verified bit-identical to full ranking. End-to-end greedy decode (KV cache): parity to +15% tok/s on an RTX 4060 laptop GPU (run-to-run variance), **+29–31% on CPU fp32** — the win scales with how bandwidth-starved the device is (see `docs/08-inference-benchmark.md`).
+On **SmolLM2-1.7B (V=49,152)** with the 49.3M SwiGLU head (race3, RTX 4060): head bandwidth 201→98.6 MiB fp16 (2.0×↓), CPU head step 18.6→8.5 ms (**2.2×**), GPU batch-1 head latency 0.80→0.85 ms (parity — kernel-launch-bound), e2e greedy generation parity at batch 1/32/128 (native 3467 vs MoB-round 3336 tok/s at b128). At high concurrency or on GPU the backbone dominates and the head share is small; the bandwidth/latency win concentrates where it hurts: CPU, NPUs, bandwidth-starved edge devices, and large-vocab models.
+
+End-to-end greedy decode on Llama (KV cache): parity to +15% tok/s on an RTX 4060 laptop GPU (run-to-run variance), **+29–31% on CPU fp32** (see `docs/08-inference-benchmark.md`; race3 numbers in `docs/20`).
 
 The architecture also makes the vocab interface fully symmetric and code-driven: `binary code → (encoder side) → backbone → MoB head → binary code`. (An MLP replacement for the *embedding table* was evaluated and shown infeasible — see `docs/10-encoder-mlp.md`; embedding offloading is the practical answer on the encoder side.)
 
 ## Status
 
-- ✅ **Minimal implementation closed the loop end-to-end (2026-09-02)**: semantic-tree codebook → MoB distillation on a frozen backbone (exact weighted-NLL on teacher top-1024) → three decode paths (round / mixture-argmax / cascade rerank, exact bound-pruned) → CPU/GPU benchmarks — every stage verified on real checkpoints.
-- ✅ **Large-scale run complete (2026-09-03)**: FineWeb-Edu 1B tokens, K=128 head, WSD schedule — normalized PPL **2.05×**, dev top-1 agreement **0.770** (round decode); cosine-2e-3 baseline: 3.05×/0.679 (note: two-variable comparison — peak LR changed together with schedule shape, so this is not a controlled schedule verdict). Curve still rising at termination — more training is headroom, not a fix (`docs/09` §6).
-- ✅ **Decode fidelity at usable level** (final head): cascade top-1 agreement **92.2–93.8%** vs native; candidate set catches a native top-8 token on **99.9%** of positions; misses degrade to the teacher's 2nd–8th choice; cascade generations indistinguishable from native under the native head (PPL 2.27 vs 2.35).
-- ✅ **Efficiency verified**: head bandwidth −75…−86%, head FLOPs 8–14× less, CPU head step up to 12.9× faster; efficiency-mode cascade step 1.14 ms GPU / 6.42 ms CPU (6.4× faster than native on CPU); e2e +29–31% tok/s on CPU.
-- ❌ Known gaps: full-distribution fidelity (normalized PPL 2.05× — "comparable" not yet met); sampling-quality decoding untested; training not topped out (second epoch / extended decay untried).
+- ✅ **Three-head race complete (2026-09-13)**: pre-norm SwiGLU (49.3M) and pre-norm ResMLP-5 (50.8M) heads decisively beat the original 3L-MLP (32M) under per-arm cosine schedules — normalized PPL **1.78×** / 1.90× / 2.41× on SmolLM2-1.7B (FineWeb-Edu dev). Per-architecture LR comfort zones measured locally first (`docs/16` §5).
+- ✅ **Decode fidelity re-benchmarked on the race heads**: cascade top-1 agreement up to **96.9%** (roundflip proposal, ~36 candidates, zero ranking GEMM); candidate set catches a native top-8 token on **99.97%** of positions; roundflip Pareto-dominates at low budget, adaptive-scope proposals win on recall ceiling (98.1%) at 6× budget (`docs/20` §3).
+- ✅ **Efficiency**: head bandwidth −50%~86% and CPU head latency 2.2-12.9× faster depending on vocab size; e2e parity on GPU at high concurrency. Round-proposal cascade decode step 0.25 ms GPU.
+- ✅ **From-scratch viability**: MoB head pretrains from scratch (212M twin, matched 0.49B-token budget): final PPL ratio 1.89× vs native twin, monotone-closing trajectory, perfect training health (`docs/15`).
+- ❌ Known gaps: full-distribution fidelity not yet at parity (1.78×); sampling-quality decoding untested; heads above 50M / longer training untested; the multi-layer heads lose to the native matvec on GPU at batch ≥256 (launch-bound; the win is bandwidth/CPU/edge, not datacenter GEMM).
 
 ## Repository layout
 
