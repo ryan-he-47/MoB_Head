@@ -67,18 +67,23 @@ def texts_zh(root):
 
 
 def texts_code(root):
+    TEXT_CAND = ("content", "code", "text", "blob_content")
     for p in sorted(glob.glob(os.path.join(root, "stack_v3", "**", "*.parquet"),
                               recursive=True)):
         pf = pq.ParquetFile(p)
-        cols = [c for c in ("content", "license_type", "language") if c in pf.schema.names]
+        names = pf.schema.names
+        tcol = next((c for c in TEXT_CAND if c in names), None)
+        if tcol is None:
+            raise KeyError(f"{os.path.basename(p)}: no text column in schema {names}")
+        cols = [tcol] + [c for c in ("license_type", "language") if c in names]
         for batch in pf.iter_batches(batch_size=2000, columns=cols):
             d = batch.to_pydict()
-            for i in range(len(d["content"])):
+            for i in range(len(d[tcol])):
                 if "license_type" in d and d["license_type"][i] not in (None, "permissive"):
                     continue
                 if "language" in d and d["language"][i] not in CODE_LANGS:
                     continue
-                yield d["content"][i]
+                yield d[tcol][i]
 
 
 def texts_instruct(root, tok):
