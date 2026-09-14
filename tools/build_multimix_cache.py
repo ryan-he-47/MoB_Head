@@ -90,7 +90,8 @@ def texts_instruct(root, tok):
     for p in sorted(glob.glob(os.path.join(root, "smoltalk", "**", "*.parquet"),
                               recursive=True)):
         pf = pq.ParquetFile(p)
-        col = "messages" if "messages" in pf.schema.names else pf.schema.names[0]
+        names = pf.schema_arrow.names  # TOP-LEVEL only (parquet .names includes nested!)
+        col = "messages" if "messages" in names else names[0]
         for batch in pf.iter_batches(batch_size=500, columns=[col]):
             for msgs in batch.column(col).to_pylist():
                 try:
