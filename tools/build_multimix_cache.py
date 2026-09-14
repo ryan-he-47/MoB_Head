@@ -159,6 +159,8 @@ def main():
         per[name] = chunks
         devs[name] = dev
         np.save(os.path.join(out, f"qwen35_dev_{name}_tokens.npy"), dev)
+        assert n_tok > 0, (f"source '{name}' produced ZERO training tokens - "
+                           f"procurement failed upstream; refuse to mix garbage")
 
     # document-level interleave by mix proportion (seeded round-robin)
     rng = np.random.default_rng(args.seed)
