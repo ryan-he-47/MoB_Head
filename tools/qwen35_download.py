@@ -1,74 +1,83 @@
 # Qwen3.5-2B prep: weights + dataset shards downloader (2026-09-14, decisions:
 # instruct variant; EN/ZH/Code/Instruct = 50/30/15/5 of ~2B tokens; scratch dir;
 # download ONLY the needed shards, never whole datasets).
-# Sources (docs/22 Q3.5): EN fineweb-edu sample-100BT x2 parquet; ZH CCI3-HQ
-# (fallback FineWeb-2 cmn_Hani + TeleChat-PTD); Code stack-v3-train shards;
-# Instruct HuggingFaceTB/smoltalk. Run on the cluster login->tiny job.
+# Pure-Python API version (the modelscope/hf CLIs are not on PATH in cose2).
 import os
-import subprocess
 import sys
 
 ROOT = "/gpfs1/scratch/yihe47/qwen35"
 DATA = os.path.join(ROOT, "data")
 MODELS = os.path.join(ROOT, "models")
 
-ENV = dict(os.environ)
-ENV["HF_ENDPOINT"] = "https://hf-mirror.com"
-ENV["HF_HUB_DISABLE_XET"] = "1"
-
-
-def run(desc, cmd, env=ENV, ok_rc=(0,)):
-    print(f"\n==== {desc}\n$ {' '.join(cmd)}", flush=True)
-    r = subprocess.run(cmd, env=env)
-    print(f"rc={r.returncode}", flush=True)
-    return r.returncode in ok_rc
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_HUB_DISABLE_XET"] = "1"
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     os.makedirs(DATA, exist_ok=True)
     os.makedirs(MODELS, exist_ok=True)
+    from modelscope.hub.snapshot_download import snapshot_download as ms_model_dl
+    try:
+        from modelscope.hub.snapshot_download import dataset_snapshot_download as ms_data_dl
+    except ImportError:
+        from modelscope import dataset_snapshot_download as ms_data_dl
+    from huggingface_hub import snapshot_download as hf_dl
 
     # ---- 1. weights (ModelScope direct) ----
-    if not run("Qwen3.5-2B weights (ModelScope)",
-               ["modelscope", "download", "--model", "Qwen/Qwen3.5-2B",
-                "--local_dir", os.path.join(MODELS, "Qwen3.5-2B")]):
-        print("WARN: weights download failed", flush=True)
+    try:
+        ms_model_dl("Qwen/Qwen3.5-2B", local_dir=os.path.join(MODELS, "Qwen3.5-2B"))
+        print("[1] weights OK", flush=True)
+    except Exception as e:
+        print(f"[1] weights FAILED: {e}", flush=True)
 
-    # ---- 2. EN: fineweb-edu sample-100BT, 2 parquets (~1.43B tok, trim later) ----
-    run("EN fineweb-edu 100BT x2 parquet",
-        ["hf", "download", "HuggingFaceFW/fineweb-edu", "--repo-type", "dataset",
-         "--include", "sample/100BT/000_00000.parquet", "sample/100BT/000_00001.parquet",
-         "--local-dir", os.path.join(DATA, "fineweb_edu_100bt")])
+    # ---- 2. EN: fineweb-edu sample-100BT, 2 parquets ----
+    try:
+        hf_dl("HuggingFaceFW/fineweb-edu", repo_type="dataset",
+              allow_patterns=["sample/100BT/000_00000.parquet", "sample/100BT/000_00001.parquet"],
+              local_dir=os.path.join(DATA, "fineweb_edu_100bt"))
+        print("[2] EN OK", flush=True)
+    except Exception as e:
+        print(f"[2] EN FAILED: {e}", flush=True)
 
-    # ---- 3. ZH: CCI3-HQ (needs MS login+agreement); fallback FineWeb-2 cmn_Hani ----
-    zh_ok = run("ZH CCI3-HQ first shards (ModelScope)",
-                ["modelscope", "download", "--dataset", "BAAI/CCI3-HQ",
-                 "--include", "data/part_00000[0-3].jsonl",
-                 "--local_dir", os.path.join(DATA, "cci3hq")])
-    cci_dir = os.path.join(DATA, "cci3hq")
-    cci_files = os.listdir(cci_dir) if os.path.isdir(cci_dir) else []
-    if (not zh_ok) or (not cci_files):
-        print("CCI3-HQ unavailable -> fallback FineWeb-2 cmn_Hani + TeleChat-PTD", flush=True)
-        run("ZH fallback FineWeb-2 cmn_Hani shard0",
-            ["hf", "download", "HuggingFaceFW/fineweb-2", "--repo-type", "dataset",
-             "--include", "data/cmn_Hani/train/000_00000.parquet",
-             "--local-dir", os.path.join(DATA, "fineweb2_zh")])
-        run("ZH fallback TeleChat-PTD file0",
-            ["hf", "download", "Tele-AI/TeleChat-PTD", "--repo-type", "dataset",
-             "--include", "data/0.jsonl.gz",
-             "--local-dir", os.path.join(DATA, "telechat_ptd")])
+    # ---- 3. ZH: CCI3-HQ (needs MS login+agreement); fallback FineWeb-2 + TeleChat ----
+    zh_done = False
+    try:
+        ms_data_dl("BAAI/CCI3-HQ", allow_file_pattern="data/part_00000[0-3].jsonl",
+                   local_dir=os.path.join(DATA, "cci3hq"))
+        zh_done = True
+        print("[3] ZH CCI3-HQ OK", flush=True)
+    except Exception as e:
+        print(f"[3] CCI3-HQ FAILED ({e}) -> fallbacks", flush=True)
+    if not zh_done:
+        for repo, pat, sub in (
+            ("HuggingFaceFW/fineweb-2", ["data/cmn_Hani/train/000_00000.parquet"], "fineweb2_zh"),
+            ("Tele-AI/TeleChat-PTD", ["data/0.jsonl.gz"], "telechat_ptd"),
+        ):
+            try:
+                hf_dl(repo, repo_type="dataset", allow_patterns=pat,
+                      local_dir=os.path.join(DATA, sub))
+                print(f"[3] ZH fallback {repo} OK", flush=True)
+            except Exception as e:
+                print(f"[3] ZH fallback {repo} FAILED: {e}", flush=True)
 
-    # ---- 4. Code: stack-v3-train shards (permissive filtered at cache build) ----
-    run("Code stack-v3-train ~15 shards",
-        ["hf", "download", "HuggingFaceCode/stack-v3-train", "--repo-type", "dataset",
-         "--include", "data/part-0000*-7d88aa48*", "data/part-0001[0-4]-7d88aa48*",
-         "--local-dir", os.path.join(DATA, "stack_v3")])
+    # ---- 4. Code: stack-v3-train shards ----
+    try:
+        hf_dl("HuggingFaceCode/stack-v3-train", repo_type="dataset",
+              allow_patterns=["data/part-0000*-7d88aa48*", "data/part-0001[0-4]-7d88aa48*"],
+              local_dir=os.path.join(DATA, "stack_v3"))
+        print("[4] Code OK", flush=True)
+    except Exception as e:
+        print(f"[4] Code FAILED: {e}", flush=True)
 
-    # ---- 5. Instruct: smoltalk (ungated) ----
-    run("Instruct smoltalk",
-        ["hf", "download", "HuggingFaceTB/smoltalk", "--repo-type", "dataset",
-         "--include", "data/train-0000[0-1]*",
-         "--local-dir", os.path.join(DATA, "smoltalk")])
+    # ---- 5. Instruct: smoltalk ----
+    try:
+        hf_dl("HuggingFaceTB/smoltalk", repo_type="dataset",
+              allow_patterns=["data/train-0000[0-1]*"],
+              local_dir=os.path.join(DATA, "smoltalk"))
+        print("[5] Instruct OK", flush=True)
+    except Exception as e:
+        print(f"[5] Instruct FAILED: {e}", flush=True)
 
     print("\nDOWNLOAD_DONE", flush=True)
     for root, _, files in os.walk(ROOT):
