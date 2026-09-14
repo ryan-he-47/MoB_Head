@@ -67,23 +67,23 @@ def texts_zh(root):
 
 
 def texts_code(root):
-    TEXT_CAND = ("content", "code", "text", "blob_content")
+    # stack-v3 rows are REPO-level: files = list<struct<content, license_type,
+    # language, ...>>. Filter per FILE inside each repo row. (schema-probed on
+    # cluster 2026-09-15 after the flat-column KeyError.)
     for p in sorted(glob.glob(os.path.join(root, "stack_v3", "**", "*.parquet"),
                               recursive=True)):
         pf = pq.ParquetFile(p)
-        names = pf.schema.names
-        tcol = next((c for c in TEXT_CAND if c in names), None)
-        if tcol is None:
-            raise KeyError(f"{os.path.basename(p)}: no text column in schema {names}")
-        cols = [tcol] + [c for c in ("license_type", "language") if c in names]
-        for batch in pf.iter_batches(batch_size=2000, columns=cols):
-            d = batch.to_pydict()
-            for i in range(len(d[tcol])):
-                if "license_type" in d and d["license_type"][i] not in (None, "permissive"):
-                    continue
-                if "language" in d and d["language"][i] not in CODE_LANGS:
-                    continue
-                yield d[tcol][i]
+        assert "files" in pf.schema_arrow.names, f"{p}: no 'files' column: {pf.schema_arrow.names}"
+        for batch in pf.iter_batches(batch_size=100, columns=["files"]):
+            for repo_files in batch.column("files").to_pylist():
+                for f in repo_files:
+                    if f.get("license_type") not in (None, "permissive"):
+                        continue
+                    if f.get("language") not in CODE_LANGS:
+                        continue
+                    c = f.get("content")
+                    if c:
+                        yield c
 
 
 def texts_instruct(root, tok):
