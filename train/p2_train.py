@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from mob.mob_common import H, K, M, MoBHead, mob_mix_logprob, decode_greedy, ecc_parity_matrix, ecc_extend
+from mob.mob_common import H, K, M, MoBHead, ResMLPHead, SwiGLUHead, mob_mix_logprob, decode_greedy, ecc_parity_matrix, ecc_extend
 
 
 def load_or_pack_tokens(tok, data_glob, cache_path, eos_id):
@@ -92,6 +92,9 @@ def main():
     ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
     ap.add_argument("--model-dir", default=None,
                     help="default: <data-root>/LLM-Research--Llama-3.2-1B/snapshots/master")
+    ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
+    ap.add_argument("--hidden", type=int, default=7300, help="swiglu FFN hidden width")
+    ap.add_argument("--blocks", type=int, default=1, help="swiglu block count")
     ap.add_argument("--outdir", default="runs/p2_10m")
     ap.add_argument("--seq-len", type=int, default=512)
     ap.add_argument("--batch", type=int, default=8)
@@ -224,7 +227,12 @@ def main():
         dev_h, dev_tids, dev_tps = extract(dev_chunks)
         dev_top1 = dev_tids[:, 0].clone()
 
-    head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=HEAD_M).cuda()
+    if args.head_type == "resmlp":
+        head = ResMLPHead(k=args.k, width=args.width, depth=args.depth, m=HEAD_M).cuda()
+    elif args.head_type == "swiglu":
+        head = SwiGLUHead(k=args.k, hidden=args.hidden, blocks=args.blocks, m=HEAD_M).cuda()
+    else:
+        head = MoBHead(k=args.k, width=args.width, depth=args.depth, m=HEAD_M).cuda()
     resume_state = None
     if args.resume and os.path.exists(args.resume):
         ck = torch.load(args.resume)
