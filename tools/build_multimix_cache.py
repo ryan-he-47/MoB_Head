@@ -77,8 +77,10 @@ def texts_code(root):
         for batch in pf.iter_batches(batch_size=100, columns=["files"]):
             for repo_files in batch.column("files").to_pylist():
                 for f in repo_files:
-                    if f.get("license_type") not in (None, "permissive"):
-                        continue
+                    # license filter WAIVED (user ruling 2026-09-15): non-commercial
+                    # research, all outputs open-source; the 14% permissive slice
+                    # starved the code budget to 1/9 of target. Language whitelist
+                    # stays - it is a relevance filter, not a legal one.
                     if f.get("language") not in CODE_LANGS:
                         continue
                     c = f.get("content")
