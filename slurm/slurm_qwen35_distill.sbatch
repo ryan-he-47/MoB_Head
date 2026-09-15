@@ -9,9 +9,11 @@
 #SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/qwen35_distill_%j.out
 
 # Qwen3.5-2B (instruct) distillation — the big-vocab mainline (2026-09-15):
-# swiglu head (race3 winner) K=128, m=18 from codebook, cosine 7e-4 warmup 4000
-# (race-validated swiglu comfort at h=2048), 1 epoch over the 2B-token
-# EN/ZH/Code/Instruct 50/30/15/5 mix (~488k steps, ~60h est).
+# swiglu head (race3 winner) K=128, m=18 from codebook, cosine 1e-3 warmup 4000
+# (batch 16 x sqrt2 LR scaling from the race-validated 7e-4@batch8; still inside
+# the measured swiglu comfort band; user decision 2026-09-15: throughput over
+# batch-8 comparability, which multilingual+2B already broke), 1 epoch over the
+# 2B-token mix = ~244k steps (~35h est at ~0.5s/step), peak mem ~14GB.
 # All artifacts in SCRATCH (home quota). Gates: verify job must have produced
 # the codebook + TAP_OK first.
 set -euxo pipefail
@@ -38,8 +40,8 @@ $PY -u -m train.p2_train \
   --dev-cache $SCRATCH/cache/qwen35_dev_mix_tokens.npy \
   --codebook $SCRATCH/data/codebook_qwen35.npz \
   --head-type swiglu --hidden 7300 \
-  --k 128 --epochs 1 --batch 8 --topk 1024 --loss-chunk 2048 \
-  --warmup 4000 --schedule cosine \
+  --k 128 --epochs 1 --batch 16 --topk 1024 --loss-chunk 2048 \
+  --warmup 4000 --schedule cosine --lr 1e-3 \
   --backbone-dtype float16 \
   --ckpt-every 20000 --ckpt-keep 3 \
   --outdir $SCRATCH/runs/p9_qwen35_swiglu
