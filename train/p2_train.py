@@ -66,9 +66,15 @@ def load_or_pack_tokens_hf(tok, cache_path, eos_id, dataset, config, split,
 
 def kmeans_vertex_init(codes_gpu, tids, tps, init_c, k, n_samp=20000, seed=42):
     g = torch.Generator().manual_seed(seed)  # CPU ops only
-    flat_w = tps.reshape(-1)
-    samp = torch.multinomial(flat_w.cpu(), n_samp, replacement=True, generator=g).cuda()
-    X = codes_gpu[tids.reshape(-1)[samp]]
+    # marginalize (position, topk) pair weights over token ids first: sampling
+    # tokens from the V-vector is statistically identical to sampling pairs and
+    # mapping to tokens, but V stays << 2^24 (torch.multinomial hard limit).
+    # (batch-16 warmup broke the pair-flat path: 32768x1024 = 33.5M > 2^24.)
+    V = codes_gpu.shape[0]
+    w_v = torch.zeros(V, dtype=torch.float32, device=tids.device)
+    w_v.scatter_add_(0, tids.reshape(-1), tps.reshape(-1).float())
+    samp_tok = torch.multinomial(w_v.cpu(), n_samp, replacement=True, generator=g).cuda()
+    X = codes_gpu[samp_tok]
     cent = [X[torch.randint(n_samp, (1,)).item()]]
     for _ in range(k - 1):
         d = torch.cdist(X, torch.stack(cent)).min(1).values.clamp_min(1e-12)
