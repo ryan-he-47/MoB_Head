@@ -30,3 +30,6 @@ data/fineweb_probe_tokens.npz
 
 models/
 generation/
+
+data/bench_data/
+data/qwen35/
