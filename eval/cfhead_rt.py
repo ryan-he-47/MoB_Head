@@ -62,8 +62,10 @@ class CFHeadRT:
 
     @torch.no_grad()
     def select(self, hidden: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """Full coarse-fine pick. Returns (token_id [B], cand [B, k])."""
+        """Full coarse-fine pick (repo tie semantics: lowest token id among fine-max
+        ties — matches CFHead.py's masked_fill/min). Returns (token_id [B], cand [B, k])."""
         cand = self.candidates(hidden, k)
         logits = self.fine_logits(hidden, cand)
-        best = torch.argmax(logits, dim=-1)
-        return cand.gather(1, best.unsqueeze(1)).squeeze(1), cand
+        maxl = logits.max(dim=-1, keepdim=True).values
+        token_ids = cand.masked_fill(logits != maxl, self.vocab_size).min(dim=-1).values
+        return token_ids, cand
