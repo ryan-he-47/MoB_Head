@@ -40,13 +40,17 @@ def find_embedding_tensor(model_dir: Path) -> tuple[torch.Tensor, str]:
         shards = sorted({model_dir / f for f in meta["weight_map"].values()})
     else:
         shards = sorted(model_dir.glob("*.safetensors"))
-    candidates = ("model.embed_tokens.weight", "embed_tokens.weight", "lm_head.weight")
+    candidates = ("model.embed_tokens.weight", "embed_tokens.weight", "lm_head.weight",
+                  "model.language_model.embed_tokens.weight")
     for shard in shards:
         with safe_open(str(shard), framework="pt", device="cpu") as f:
-            for key in candidates:
-                if key in f.keys():
-                    t = f.get_tensor(key)
-                    return t, str(t.dtype)  # repo metadata keeps the "torch." prefix
+            keys = list(f.keys())
+            hit = next((k for k in candidates if k in keys), None)
+            if hit is None:  # fallback: any *embed_tokens.weight (multimodal wrappers nest)
+                hit = next((k for k in keys if k.endswith("embed_tokens.weight")), None)
+            if hit is not None:
+                t = f.get_tensor(hit)
+                return t, str(t.dtype)  # repo metadata keeps the "torch." prefix
     raise SystemExit(f"no embedding/lm_head tensor found in {shards}")
 
 
