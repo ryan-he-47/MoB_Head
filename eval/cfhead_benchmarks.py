@@ -14,14 +14,15 @@
 # Run from the repo root:  python -m eval.cfhead_benchmarks [options]
 #
 # Deviations from the repro (noted per task spec):
-#   1. MGSM (en/zh): the standard 8-shot MGSM prompt template is NOT available,
-#      so a 5-shot repro-style chat prompt is used instead. The 5 demos are the
-#      FIRST 5 ROWS of each language's own parquet (the only in-repo source of
-#      language-matched worked solutions); those 5 rows remain in the 250-row
-#      eval set and are flagged `in_fewshot_demos` in the JSONL so the report
-#      can exclude them (2% contamination, all four arms benefit symmetrically).
-#      Answer extraction per spec: gold = number after '####' in the answer
-#      column; prediction = LAST INTEGER in the generated text.
+#   1. MGSM (en/zh): this parquet export's `answer`/`equation_solution` columns
+#      are 100% NaN (250/250, both languages) — gold answers come from
+#      `answer_number` (int32, intact). 5-shot demos come from the MGSM
+#      train_en export (`--mgsm-demo-file`, proper worked solutions ending in
+#      "The answer is N") for BOTH languages = the MGSM paper's EN-CoT
+#      condition; labeled in the report. (2026-09-19 fix: the original run
+#      extracted gold='nan' and demoed 'nan' assistant replies — caught by the
+#      all-False correct column; containment/agreement rows from that run are
+#      void and MGSM was rerun.)
 #   2. GSM8K/MGSM max_new = 256 (task spec; the repro used 512 for gsm8k).
 #   3. EOS set = tokenizer.eos_token_id U generation_config.eos_token_id (Qwen
 #      instruct emits <|im_end|>); finished steps are filled with
@@ -67,8 +68,8 @@ TASK_FILES = {
 # in the repro repo's script/eval_common.py::build_gsm8k). The zh instruction is
 # a straight translation — the official MGSM 8-shot template is unavailable.
 MGSM_INSTRUCTION = {
-    "en": "Solve the problem. Give the final answer after ####.",
-    "zh": "解答下面的数学题，并把最终答案写在 #### 后面。",
+    "en": "Solve the problem. Give the final answer after 'The answer is'.",
+    "zh": "解答下面的数学题，并把最终答案写在 'The answer is' 后面。",
 }
 ARMS = ["original", "cfhead_q", "cfhead_m", "mob_cascade"]
 CFHEAD_K = {"cfhead_q": 256, "cfhead_m": 8192}          # runtime top-k per arm
@@ -94,19 +95,21 @@ def load_jsonl_seed99(path: Path, n: int) -> list[dict]:
     return rows[:n]
 
 
-def load_mgsm(path: Path, lang: str) -> list[dict]:
-    """Full test split (250 rows expected) in file order; first 5 rows double as
-    the 5-shot demos (flagged in_fewshot_demos)."""
+def load_mgsm(path: Path, lang: str, demo_path: Path) -> list[dict]:
+    """Full test split (250 rows expected) in file order. This parquet export's
+    `answer` column is 100% NaN -> gold = `answer_number`; 5-shot demos from the
+    MGSM train_en export (worked solutions, 'The answer is N' style)."""
     import pandas as pd
 
     df = pd.read_parquet(path)
-    n_demo = min(5, len(df))
-    demos = [(str(df.iloc[i]["question"]), str(df.iloc[i]["answer"])) for i in range(n_demo)]
+    ddf = pd.read_parquet(demo_path)
+    demos = [(str(ddf.iloc[i]["question"]), str(ddf.iloc[i]["answer"]))
+             for i in range(min(5, len(ddf)))]
     instr = MGSM_INSTRUCTION[lang]
     rows = []
     for i in range(len(df)):
         q = str(df.iloc[i]["question"])
-        a = str(df.iloc[i]["answer"])
+        gold = str(int(df.iloc[i]["answer_number"]))
         messages = []
         for dq, da in demos:
             messages.append({"role": "user", "content": f"{instr}\n\n{dq}"})
@@ -116,9 +119,8 @@ def load_mgsm(path: Path, lang: str) -> list[dict]:
             "task": f"mgsm_{lang}",
             "sample_id": i,
             "messages": messages,
-            "target": a,
+            "target": gold,
             "answer_type": "mgsm",
-            "in_fewshot_demos": i < n_demo,
         })
     if len(rows) != 250:
         log(f"WARNING: {path.name} has {len(rows)} rows (MGSM full test split is expected to be 250)")
@@ -326,7 +328,8 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
              mob_ctx, e_weight: torch.Tensor, diag_q_rt, out_dir: Path) -> list[dict]:
     loader, n_samples, max_new, answer_type = TASKS[task]
     if loader == "mgsm":
-        samples = load_mgsm(Path(args.bench_root) / TASK_FILES[task], task.split("_")[1])
+        samples = load_mgsm(Path(args.bench_root) / TASK_FILES[task], task.split("_")[1],
+                            Path(args.bench_root) / args.mgsm_demo_file)
     else:
         samples = load_jsonl_seed99(Path(args.bench_root) / TASK_FILES[task], n_samples)
     if args.limit is not None:
@@ -517,6 +520,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="Original vs CFHead vs MoB-cascade benchmark comparison (Qwen3.5-2B)")
     p.add_argument("--model-dir", default="/gpfs1/scratch/yihe47/qwen35/models/Qwen3.5-2B")
     p.add_argument("--bench-root", default="/gpfs1/scratch/yihe47/qwen35/bench_data")
+    p.add_argument("--mgsm-demo-file", default="mgsm_train_en.parquet")
     p.add_argument("--cfhead-cache-dir", default="/gpfs1/scratch/yihe47/qwen35/cfhead_cache")
     p.add_argument("--mob-head", default="/gpfs1/scratch/yihe47/qwen35/runs/p9_qwen35_swiglu/head_latest.pt")
     p.add_argument("--codebook", default="/gpfs1/scratch/yihe47/qwen35/data/codebook_qwen35.npz")
