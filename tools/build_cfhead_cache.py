@@ -46,7 +46,7 @@ def find_embedding_tensor(model_dir: Path) -> tuple[torch.Tensor, str]:
             for key in candidates:
                 if key in f.keys():
                     t = f.get_tensor(key)
-                    return t, str(t.dtype).replace("torch.", "")
+                    return t, str(t.dtype)  # repo metadata keeps the "torch." prefix
     raise SystemExit(f"no embedding/lm_head tensor found in {shards}")
 
 
