@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -76,26 +77,33 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
         "cfq_fine32", "cfq_fine_def", "cfm_fine32", "cfm_fine_def",
     )}
     k_def = {"cfq": 256, "cfm": 8192}
+    t_start = time.perf_counter()
 
     for i in range(0, n_chunks, args.batch):
         x = chunks[i:i + args.batch]
         out = model(x[:, :-1], output_hidden_states=True)
         tgt = x[:, 1:].reshape(-1)
         h = out.hidden_states[-1].float().reshape(-1, H)
-        logits_flat = out.logits.float().reshape(-1, V)
-
-        nat_nll = F.cross_entropy(logits_flat, tgt, reduction="none")
-        nat_top1 = logits_flat.argmax(-1)
-        nat_top8 = logits_flat.topk(8, dim=-1).indices
-        probs = F.softmax(logits_flat, dim=-1)
-        nat_p1 = probs.gather(1, nat_top1.unsqueeze(1)).squeeze(1)
-        nat_ent = -(probs * torch.log(probs.clamp_min(1e-45))).sum(-1)
+        # keep the [B*T,V] logits in bf16 (254MB at V=248k) and cast per
+        # pos-chunk below — a full fp32 cast (+508MB) paged VRAM on the 8GB card
+        # (2026-09-18: 30W-power-draw stall observed). bf16 argmax/topk ordering
+        # is identical to the fp32 cast's.
+        logits_bf = out.logits.reshape(-1, V)
+        nat_top1 = logits_bf.argmax(-1)
+        nat_top8 = logits_bf.topk(8, dim=-1).indices
+        del out
 
         bl, pl = head(h)
         log_pi = F.log_softmax(pl, dim=-1)
         n = h.shape[0]
         for s in range(0, n, args.pos_chunk):
             pc = slice(s, s + args.pos_chunk)
+            lf = logits_bf[pc].float()                               # [pc,V] fp32 slice
+            per_pos["nat_nll"].append(F.cross_entropy(lf, tgt[pc], reduction="none").cpu())
+            probs = F.softmax(lf, dim=-1)
+            per_pos["nat_p1"].append(probs.gather(1, nat_top1[pc].unsqueeze(1)).squeeze(1).cpu())
+            per_pos["nat_ent"].append((-(probs * torch.log(probs.clamp_min(1e-45))).sum(-1)).cpu())
+            del probs
             b = bl[pc]
             lp = log_pi[pc]
             term = torch.einsum("vm,nkm->nvk", codes_all, b)            # [pc,V,K]
@@ -113,7 +121,7 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
             nt8 = nat_top8[pc]
             per_pos["mix_hit8"].append(
                 (cand32.unsqueeze(-1) == nt8.unsqueeze(1)).any(1).any(-1).cpu())
-            pick = cand32.gather(1, logits_flat[pc].gather(1, cand32).argmax(-1, keepdim=True)).squeeze(1)
+            pick = cand32.gather(1, lf.gather(1, cand32).argmax(-1, keepdim=True)).squeeze(1)
             per_pos["mix_rerank_agree"].append((pick == nt1).cpu())
             del mix, cand32
 
@@ -122,23 +130,27 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
             bits = b.gather(1, ktop.unsqueeze(-1).expand(-1, -1, CB_M)) > 0
             rtok = vid_to_tok[(bits.long() * shifts).sum(-1)]           # [pc,32], -1 invalid
             per_pos["round_recall"].append((rtok == nt1.unsqueeze(1)).any(-1).cpu())
-            sc = logits_flat[pc].gather(1, rtok.clamp_min(0))
+            sc = lf.gather(1, rtok.clamp_min(0))
             sc = sc.masked_fill(rtok < 0, float("-inf"))
             rpick = rtok.clamp_min(0).gather(1, sc.argmax(-1, keepdim=True)).squeeze(1)
             per_pos["round_rerank_agree"].append((rpick == nt1).cpu())
             del rtok, sc
 
-            # roundflip proposal (per-position; n_batch==1 API)
-            for j in range(s, min(s + args.pos_chunk, n)):
-                cands = propose_roundflip(bl[j:j + 1], log_pi[j:j + 1], codes_all, vid_to_tok)
-                nt1_j = nat_top1[j:j + 1]
-                per_pos["rf_recall"].append((cands == nt1_j).any().cpu().view(1))
-                per_pos["rf_hit8"].append(
-                    (cands.unsqueeze(-1) == nat_top8[j]).any(0).any().cpu().view(1))
-                sc_j = logits_flat[j].gather(0, cands)
-                per_pos["rf_rerank_agree"].append(
-                    (cands[sc_j.argmax()] == nt1_j).cpu().view(1))
-                per_pos["rf_count"].append(torch.tensor([cands.numel()], dtype=torch.float32))
+            # roundflip proposal (per-position; n_batch==1 API) — OFF by default:
+            # the python-loop costs ~0.1s/position (~2h/source at V=248k). Its
+            # fidelity band is bracketed by round (floor) and mixture (ceiling)
+            # here, and it is exercised per-decode-step in the longform harness.
+            if "roundflip" in args.mob_proposals:
+                for j in range(s, min(s + args.pos_chunk, n)):
+                    cands = propose_roundflip(bl[j:j + 1], log_pi[j:j + 1], codes_all, vid_to_tok)
+                    nt1_j = nat_top1[j:j + 1]
+                    per_pos["rf_recall"].append((cands == nt1_j).any().cpu().view(1))
+                    per_pos["rf_hit8"].append(
+                        (cands.unsqueeze(-1) == nat_top8[j]).any(0).any().cpu().view(1))
+                    sc_j = lf[j - s].gather(0, cands)
+                    per_pos["rf_rerank_agree"].append(
+                        (cands[sc_j.argmax()] == nt1_j).cpu().view(1))
+                    per_pos["rf_count"].append(torch.tensor([cands.numel()], dtype=torch.float32))
 
             # CFHead arms
             hh = h[pc]
@@ -157,10 +169,19 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
                     per_pos[f"{key}_{ktag}"].append((fpick == nat_top1[pc]).cpu())
                 del coarse
 
-        per_pos["nat_p1"].append(nat_p1.cpu())
-        per_pos["nat_ent"].append(nat_ent.cpu())
-        per_pos["nat_nll"].append(nat_nll.cpu())
-        print(f"[{name}] batch {i // args.batch + 1}/{(n_chunks + args.batch - 1) // args.batch}", flush=True)
+            done_pos = i * T + min(s + args.pos_chunk, n)
+            if (s // args.pos_chunk) % 8 == 7 or min(s + args.pos_chunk, n) == n:
+                el = time.perf_counter() - t_start
+                total_pos = n_chunks * T
+                rate = done_pos / max(el, 1e-9)
+                eta = (total_pos - done_pos) / max(rate, 1e-9)
+                free_b, total_b = torch.cuda.mem_get_info()
+                print(f"[{name}] {done_pos}/{total_pos} pos "
+                      f"({rate:.0f} pos/s, eta {eta / 60:.1f}min, "
+                      f"vram free {free_b / 2 ** 20:.0f}/{total_b / 2 ** 20:.0f} MiB)",
+                      flush=True)
+
+        print(f"[{name}] chunk {i // args.batch + 1}/{(n_chunks + args.batch - 1) // args.batch} done", flush=True)
 
     d = {k: torch.cat(v).float().numpy() for k, v in per_pos.items() if v}
     n_pos = len(d["nat_nll"])
@@ -193,14 +214,15 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
             "recall": bucketed(d["round_recall"]),
             "rerank_agreement": bucketed(d["round_rerank_agree"]),
         },
-        "mob_roundflip": {
+    }
+    if d.get("rf_recall") is not None:
+        result["mob_roundflip"] = {
             "recall": bucketed(d["rf_recall"]),
             "hit_at_native_top8": bucketed(d["rf_hit8"]),
             "rerank_agreement": bucketed(d["rf_rerank_agree"]),
             "mean_candidates": float(d["rf_count"].mean()),
             "p95_candidates": float(np.quantile(d["rf_count"], 0.95)),
-        },
-    }
+        }
     for key, label in (("cfq", "cfhead_q"), ("cfm", "cfhead_m")):
         rk = f"{key}_rank"
         if rk not in d:
@@ -232,8 +254,12 @@ def main() -> None:
     ap.add_argument("--backbone-dtype", default="bfloat16")
     ap.add_argument("--n-chunks", type=int, default=32)
     ap.add_argument("--batch", type=int, default=4)
-    ap.add_argument("--pos-chunk", type=int, default=8,
-                    help="positions per sub-chunk for the [pos,V,K] pass (V=248k,K=128: 8 ~= 1GB)")
+    ap.add_argument("--pos-chunk", type=int, default=4,
+                    help="positions per sub-chunk for the [pos,V,K] pass (V=248k,K=128: 4 ~= 0.5GB; "
+                         "8 paged VRAM on the 8GB 4060)")
+    ap.add_argument("--mob-proposals", default="mixture,round",
+                    help="comma list of mixture,round,roundflip; roundflip is per-position "
+                         "python-loop slow (~2h/source at V=248k) — off by default")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -268,7 +294,8 @@ def main() -> None:
             json.dump(res, f, indent=2)
         print(json.dumps({"source": name,
                           "mob_ppl_ratio": res["mob_head"]["ppl_ratio_vs_native"],
-                          "rf_rerank": res["mob_roundflip"]["rerank_agreement"]["overall"]},
+                          "mix_rerank": res["mob_mixture"]["rerank_agreement"]["overall"],
+                          "round_rerank": res["mob_round32"]["rerank_agreement"]["overall"]},
                          indent=2), flush=True)
     with open(out_dir / "cfhead_eval_all.json", "w") as f:
         json.dump(all_results, f, indent=2)
