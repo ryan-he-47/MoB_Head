@@ -265,12 +265,15 @@ def cfhead_containment(rt: CFHeadRT, k: int, h_stack: torch.Tensor,
 @torch.no_grad()
 def mob_containment(head, codes_all, vid_to_tok, h_stack: torch.Tensor,
                     orig_ids: torch.Tensor) -> tuple[int, int, float]:
+    # NOTE (2026-09-19, post-hoc): the head forward is batched over all steps
+    # (row-independent ops -> numerically identical to per-step calls, ~3x less
+    # launch overhead). propose_roundflip stays per-step (n_batch==1 API) and
+    # remains the cost pig of the original pass (~10-15s per MGSM sample).
     hits, steps, sizes = 0, h_stack.shape[0], 0
+    bl_all, pl_all = head(h_stack.float())
+    log_pi_all = F.log_softmax(pl_all, dim=-1)
     for t in range(steps):
-        hf = h_stack[t:t + 1].float()
-        bl, pl = head(hf)
-        log_pi = F.log_softmax(pl, dim=-1)
-        cand = propose_roundflip(bl, log_pi, codes_all, vid_to_tok)
+        cand = propose_roundflip(bl_all[t:t + 1], log_pi_all[t:t + 1], codes_all, vid_to_tok)
         hits += int((cand == orig_ids[t]).any().item())
         sizes += cand.numel()
     return hits, steps, sizes / max(steps, 1)
