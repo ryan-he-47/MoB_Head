@@ -134,7 +134,7 @@ def main() -> None:
             "index_dtype": "uint8",
         }
         name = (f"cfhead_v{CACHE_VERSION}_V{V}_H{H}_T{args.tile}_C{clusters}"
-                f"_K{args.top_k}_iters{args.iters}_seed{args.seed}_{dtype_tag}.pt")
+                f"_K{args.top_k}_iters{args.iters}_seed{args.seed}_{dtype_tag.replace('torch.', '')}.pt")
         path = out_dir / name
         torch.save({"metadata": meta, "codebook": codebook.cpu(), "index_map": index_map.cpu()}, path)
         mib = (codebook.numel() * 4 + index_map.numel()) / 1024 / 1024
