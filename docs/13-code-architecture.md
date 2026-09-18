@@ -154,6 +154,21 @@ HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼
 19. **`torch.load(weights_only)` 警告**：集群 transformers/torch 新版默认会翻转——老脚本注意兼容。
 20. **k-means init 只覆盖 bias 的 bit 部分**：`head.out.bias[:k*CB_M]`（ECC 时扩到 `k*HEAD_M`，扩位码本参与 init）。
 
+### 8.5 2026-09-15 Qwen 线增补（数据管线/大词表/ scratch 纪律）
+
+- **p2_train.py 新增**：`--head-type {mob,resmlp,swiglu}` + `--hidden/--blocks`（单头脚本也能跑赛马架构）；`kmeans_vertex_init` 改为**先按 token 聚合权重到 V 维再 multinomial**（边缘分布精确等价，已数值+经验验证：`tools/test_kmeans_boundary.py`）——原实现对 [位置×topk] 摊平采样，撞 torch multinomial 的 2²⁴ 类别硬上限（batch-16 warmup 32768×1024=33.5M 超限）。
+- **Qwen3.5 管线脚本**：`tools/qwen35_download.py`（ModelScope-only、幂等、list-then-download）、`tools/build_multimix_cache.py`（四源 50/30/15/5 文档级交错 + 每源 2M dev + 审计侧车 segments.npy；每源非空断言）、`tools/verify_qwen35_tap.py`（新架构 tap 点验证，蒸馏前置闸）、`tools/chinese_qual.py`（中文涌现定性探针）、`eval/benchmark_race3.py`（三头全量效率基准）、`eval/analyze_race3.py` / `eval/summarize_race3.py`。
+- **Qwen3.5 sbatch**：`slurm_qwen35_prep.sbatch`（tiny：下载+混料缓存）、`slurm_qwen35_verify.sbatch`（GPU：tap+18 位码本）、`slurm_qwen35_distill.sbatch`（swiglu K=128 m=18，batch 16 余弦 1e-3 warmup 4000，~244k 步，5 路链式验收）。**产物全落 `/gpfs1/scratch/yihe47/qwen35/`**（home 配额纪律）。
+
+### 8.6 新坑增补（编号续 §7.4）
+21. **torch.multinomial 类别数 ≤ 2²⁴**：超过即 RuntimeError。摊平维度设计时算一遍总量。
+22. **pyarrow `pf.schema.names` 含嵌套 struct 子字段**——顶层列名要用 `pf.schema_arrow.names`（stack-v3/smoltalk 两连踩）。
+23. **stack-v3 是 repo 级行**：`files = list<struct<content, license_type, language...>>`，逐文件过滤须炸开嵌套（调研报告的"文件级行"说法有误，以实测 schema 为准）。
+24. **hf-mirror 的 LFS 桥对集群不通**（元数据 API 通、文件下载全挂）——集群下载一律 ModelScope；下前用 `GET /api/v1/datasets/<ns>/<name>/repo/tree?Revision=master&Root=...` 侦察真实文件名，别猜。
+25. **batch 尺寸是吞吐杠杆也是配方变量**：batch-8 配方出身本地 8GB 卡，在 V100 上只用 ~28% 显存/~26% 算力（launch-bound）；提 batch 按 √2 缩 LR 且别出实测舒适带。一致性 vs 吞吐的取舍显式记录。
+26. **大宗产物一律 scratch**，home 只放代码/文档/小日志；`git pull` 卡 merge 先查未跟踪阻挡文件（删之再拉）。
+27. **作业"静默消失"先查操作记录再当故障查**：556232 跑了 1400 步健康曲线后被计划内 scancel，用户看到"消失"一度按 OOM/管线 bug 排查——改配方撤单重挂时，在日志/汇报里把 scancel 动作写明白。
+
 ## 8. 扩展指引
 
 - **换容量**：`--k/--width`（+ 评测脚本同步）；K=128 时 n_eff 只有 ~74-89，提示分量数可能偏多，升 K 前先看 n_eff。
