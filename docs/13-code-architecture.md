@@ -167,7 +167,30 @@ HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼
 24. **hf-mirror 的 LFS 桥对集群不通**（元数据 API 通、文件下载全挂）——集群下载一律 ModelScope；下前用 `GET /api/v1/datasets/<ns>/<name>/repo/tree?Revision=master&Root=...` 侦察真实文件名，别猜。
 25. **batch 尺寸是吞吐杠杆也是配方变量**：batch-8 配方出身本地 8GB 卡，在 V100 上只用 ~28% 显存/~26% 算力（launch-bound）；提 batch 按 √2 缩 LR 且别出实测舒适带。一致性 vs 吞吐的取舍显式记录。
 26. **大宗产物一律 scratch**，home 只放代码/文档/小日志；`git pull` 卡 merge 先查未跟踪阻挡文件（删之再拉）。
-27. **作业"静默消失"先查操作记录再当故障查**：556232 跑了 1400 步健康曲线后被计划内 scancel，用户看到"消失"一度按 OOM/管线 bug 排查——改配方撤单重挂时，在日志/汇报里把 scancel 动作写明白。
+
+### 7.5 2026-09-09~18 增补（赛马线 + Qwen 线）
+
+**头族修订**：`SwiGLUHead` 09-09 修复——原版无 pre-norm 且 block0 无残差（高 LR 必炸的设计事故，第一版 LR 扫描的 swiglu 数据因此作废）；现为 transformer FFN 标准形（每块 pre-norm RMSNorm + 残差，终 norm 后进 out），hidden=7300×1 块 = 49.6M 与 resmlp5 51.2M 对齐。
+
+**p2_train_dual.py**：`--schedule {wsd,cosine}` + 每臂独立峰值（ARM_SET 里的 `"peak"` 字段 + `--peaks tag=val,...` CLI 覆盖）+ `race3` 臂集（control/resmlp/swiglu）+ 每臂独立 lr 日志（`lr_<tag>`）+ `--backbone-dtype`。日志 record 不再有全局 `lr` 键。
+
+**p2_train.py**：`--head-type {mob,resmlp,swiglu}` + `--hidden/--blocks`；`kmeans_vertex_init` 改为**权重先按 token 聚合到 V 维再 multinomial**（分布逐点等价，数值+经验双验证 `tools/test_kmeans_boundary.py`）——原实现摊平 [位置×topk] 采样，撞 multinomial 的 2²⁴ 类别硬上限（batch-16 warmup 时 33.5M 超限）。
+
+**多模型 plumbing 普及**：`p3_eval.py` / `eval_topk_recall.py` / `p8_eval_adaptive.py` 全部支持 `--model-dir/--codebook/--dev-cache/--head-type/--depth/--hidden/--blocks`；M 一律从码本读（`CB_M = codes.shape[1]`），头部构建发生在码本加载之后（先建头会拿默认 M=17 炸 shape mismatch）。
+
+**新脚本**：`eval/benchmark_race3.py`（三头效率全套：头延迟 GPU/CPU、解码路径成本、e2e tok/s b1/32/128、解析表）；`eval/analyze_race3.py` + `eval/summarize_race3.py`（曲线形态+汇总表）；`tools/chinese_qual.py`（中文涌现定性探针，三路径并排）；`tools/verify_qwen35_tap.py`（新架构 tap 点验证闸）；`tools/qwen35_download.py`（ModelScope-only、幂等、list-then-download）；`tools/build_multimix_cache.py`（四源 50/30/15/5 文档级交错缓存 + 每源 dev + 非空断言 + segments 审计侧车）；`tools/test_kmeans_boundary.py`。
+
+**新 sbatch**：`slurm_race3{,_smoke}.sbatch`、`slurm_diag_{load,env}.sbatch`（已废，配额案后归档）、`slurm_qwen35_{prep,verify,distill}.sbatch`。**蒸馏 sbatch 的产物路径全部指向 `/gpfs1/scratch/yihe47/qwen35/`**（runs/cache/data/models 全在 scratch，home 只放代码）。
+
+### 7.6 新坑增补（编号续 §7.4）
+
+21. **torch.multinomial 类别数 ≤ 2²⁴**：摊平维数设计时先算总量（batch-16 warmup 的 32768×1024=33.5M 直接炸）。
+22. **pyarrow `ParquetFile.schema.names` 含嵌套 struct 子字段名**——拿顶层列名必须 `schema_arrow.names`（stack-v3 的 repo 级嵌套行、smoltalk 的 messages struct 各踩一次）。
+23. **hf-mirror 的 LFS/Xet 桥对集群不通**（元数据 API 通、文件下载全报 connection 错）——集群下载一律 ModelScope；且**先 API 侦察文件名再下**（`GET /api/v1/datasets/<ns>/<name>/repo/tree?...`），猜文件名猜炸过两轮。
+24. **作业无声死亡 + exit 120 + 无 traceback** = 先查磁盘配额（CPython stdio flush 失败签名）；配额清理优先级：跑完跑的 step 归档 > ~/.cache/pip > conda pkgs 缓存；大宗产物一律 scratch。
+25. **集群同步 = git pull**；pull 卡 "untracked files would be overwritten" 是此前中断的 pull 留下的残片——删掉列出的文件再拉（别 git clean，data/ 下有未忽略的贵资产）。
+26. **batch 是吞吐杠杆也是配方变量**：batch-8 出身本地 8GB 卡，V100 上只用 ~28% 显存；提 batch 时 LR 按 √2 缩且不出实测舒适带；改配方撤单重挂要在汇报里写明（556232 被计划内 scancel 被误读成崩溃）。
+27. **重组后入口一律 `python -m <pkg>.<mod>`**：按路径跑脚本会让包导入炸（slurm_qwen35_distill 初版和本地测试各忘一次）。
 
 ## 8. 扩展指引
 
