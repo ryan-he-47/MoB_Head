@@ -118,8 +118,8 @@ HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼
   - `mixture_topk(bit_logits, log_pi, codes_all, topn)`——**界剪枝精确 top-k**（L=max_k A ≤ log p ≤ L+log K，幸存者才做精确 logsumexp；与全排名逐位相同）。
   - `decode_greedy(..., m=)`——选分量+逐位取整（旧主线，带 Hamming 回退）。
   - `decode_mixture_argmax(...)`——全顶点混合概率 argmax（主线档）。
-  - `decode_rerank_native(..., E, h, topn=32, proposal={"mixture","round","roundflip","adaptive"}, vid_to_tok, adaptive_kwargs)`——级联重排：提议+嵌入表行 gather 精确重打分。**roundflip（当前最优，v3 默认 aug_topn=32/per_comp_cap=8/α=0.15）**：众数优先+全分量小额翻转对冲，召回 96.5%/重排 96.5%/hit8 100%，零码本 GEMM。
-  - `propose_adaptive(...)`（v2 版：分量硬下限 floor + 优先级序生成；当前为研究留档，头进化后复评）、`propose_roundflip(...)`。
+  - `decode_rerank_native(..., E, h, topn=32, proposal={"mixture","round","roundflip","adaptive","scoreflip"}, vid_to_tok, adaptive_kwargs)`——级联重排：提议+嵌入表行 gather 精确重打分。**roundflip（v3 默认 aug_topn=32/per_comp_cap=8/α=0.15）**：众数优先+全分量小额翻转对冲，召回 96.5%/重排 96.5%/hit8 100%，零码本 GEMM。
+  - **2026-09-19 预算 256 档（docs/27 §2.4-2.5）**：新增 `propose_varflip`（全 K 模式去重+分量方差序——**已证伪**，256 打不过 roundflip-85）与 `propose_scoreflip`（π 质量域发射+方差序翻转格点+**精确混合概率重打分按分截断**——**全胜便宜策略，尖锐位自截断 90-105 候选，新工作推荐默认提议**；函数签名默认未动以保历史可比，decode_rerank_native 用 `proposal="scoreflip"` 显式取用）。bit 级方差序（翻转优先级=翻转位方差和降序=分量内精确似然序）入两新函数。`decode_greedy` 之外还有 `tools/bench_scoreflip.py`（等带宽保真+延迟对打）。
 - **ECC 基建（实验冻结）**：`ecc_parity_matrix(m,p,seed)` + `ecc_extend(codes,pmat)`；p2_train `--ecc-bits` 在线扩位。
 - **多模型基建**：`--codebook/--dev-cache` 开关（p2_train/p3_eval/p2_train_dual）；`build_codebook.py` 参数化（`--model-dir/--out-npz/--out-meta/--seed/--device`，M=ceil(log2 V) 自动，分片安全 glob 加载）。
 

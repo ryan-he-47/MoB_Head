@@ -88,6 +88,21 @@ VQ 粗排名的软肋正是弥散/多峰位（q1），MoB 的混合密度为那�
 - **结果**：scoreflip 全胜便宜策略且在尖锐源自截断到 ~90-105 候选；varflip 被支配（256 打不过 85 的 roundflip）——**bit 级方差序成立，分量级方差序证伪**（与随机头单测方向一致）。
 - **头条结论：连精确上限 mixture_topk@256 都差 CFHead-T4@256 一截（1~2pt，四源一致）**——k=32 时 MoB 赢 EN/ZH 是逐位概率结构在紧预算下排名更准；k=256 时 VQ 粗筛（真实权重上免训练构建）容错足够，而 92% 进度的密度在 ~2% 位置上没给足质量。**解码策略已挖尽，差距在密度，杠杆在训练侧 → 直接导向端到端蒸馏。** hit@8 仍全 ≥0.996（优雅降级不变）。
 
+## 2.5 等带宽预算：scoreflip-256 vs CFHead-T4（2026-09-19 追加，tools/bench_scoreflip.py）
+
+带宽平价核算（Qwen3.5-2B 每步新增读取）：CFHead-T4 = 512 tile × 248,320 × 6bit = **95.3 MiB**（INT6 理论；uint8 运行 127.1）+ 码本 0.25MiB + 256 行 gather 1MiB；MoB swiglu 头 fp16 = **95.0 MiB**（fp32 190）+ gather 1MiB。**理论口径平价成立**。
+
+保真（stride-16 抽样 1024 位/源，配对；cascade/fine 后一致率含并列翻转税）：
+
+| 源 | T4 recall | T4 fine一致 | mixture256（上限） | scoreflip256 | roundflip85 |
+|---|---|---|---|---|---|
+| EN | 0.9990 | 0.9717 | 0.9805 / 0.9658 | 0.9707 / 0.9541 | 0.9619 / 0.9619 |
+| ZH | 0.9971 | 0.9736 | 0.9678 / 0.9551 | 0.9580 / 0.9453 | 0.9307 / 0.9307 |
+
+T4 的并列翻转税反而更重（recall→fine −2.5pt vs MoB −1.3pt）——其细阶段 bf16 GEMV 归约序与 HF 不同；抽样偏差 ±0.6pt 见 §2.4 注。
+
+延迟（4060 Laptop，**双方均为朴素实现**——CFHead 无 Triton/CUDA 内核（Windows），scoreflip 是 python 循环；按用户裁定 python/实现开销不入账，仅作存档）：GPU：原生 4.22 / T4 14.4 / mixture256 4.45 / roundflip85 19.1 / scoreflip256 104 ms；CPU：原生 103.8 / T4 217.8 / scoreflip 34.2 / roundflip 16.7 / mixture256 47.0 ms。**算法级核算**：scoreflip = 头前向（49.9M MAC）+ 发射（≤74k MAC）+ [C,K] 重打分（≤4.7M MAC，典型 <1M）+ 256 行重排——round+flip 级别，无 V 宽操作；CPU 侧即使带 python 税也是 原生的 1/3、T4 的 1/6.4（其 127MiB 索引图随机游走对 CPU 缓存极不友好）。
+
 ## 5. 综合判定（Table 1 素材）
 
 1. **轨迹/benchmark 口径**：人人 ~100% / ±噪声（CFHead-Q 确实稳，该承认）；M 档在 Qwen 不可用。

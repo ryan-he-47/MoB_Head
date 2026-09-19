@@ -435,6 +435,17 @@ def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
             cand = mixture_topk(bit_logits, log_pi, codes_all, 1)
         scores = h[0].to(E.dtype) @ E[cand].T
         return cand[scores.argmax()].view(1)
+    if proposal == "scoreflip":
+        # budget-256-class mainline proposal (2026-09-19, docs/27 §2.4): best
+        # cheap approximation of mixture_topk — self-truncates on peaked
+        # positions (~90-105 candidates), 256 on diffuse ones.
+        assert bit_logits.shape[0] == 1 and vid_to_tok is not None
+        cand = propose_scoreflip(bit_logits, log_pi, codes_all, vid_to_tok,
+                                 **(adaptive_kwargs or {}))
+        if cand.numel() == 0:
+            cand = mixture_topk(bit_logits, log_pi, codes_all, 1)
+        scores = h[0].to(E.dtype) @ E[cand].T
+        return cand[scores.argmax()].view(1)
     if proposal == "round":
         assert bit_logits.shape[0] == 1 and vid_to_tok is not None
         m = bit_logits.shape[-1]

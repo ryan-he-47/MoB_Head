@@ -43,7 +43,8 @@ import torch
 import torch.nn.functional as F
 
 from eval.cfhead_rt import CFHeadRT
-from mob.mob_common import SwiGLUHead, decode_rerank_native, propose_roundflip
+from mob.mob_common import (SwiGLUHead, decode_rerank_native, propose_roundflip,
+                            propose_scoreflip)
 
 SEED = 99
 NUM_RE = r"[-+]?\d[\d,]*(?:\.\d+)?"
@@ -71,9 +72,10 @@ MGSM_INSTRUCTION = {
     "en": "Solve the problem. Give the final answer after 'The answer is'.",
     "zh": "解答下面的数学题，并把最终答案写在 'The answer is' 后面。",
 }
-ARMS = ["original", "cfhead_q", "cfhead_m", "mob_cascade"]
-CFHEAD_K = {"cfhead_q": 256, "cfhead_m": 8192}          # runtime top-k per arm
-CFHEAD_CLUSTERS = {"cfhead_q": 64, "cfhead_m": 4}       # C in the cache filename
+ARMS = ["original", "cfhead_q", "cfhead_m", "mob_cascade", "cfhead_t4", "mob_scoreflip"]
+CFHEAD_K = {"cfhead_q": 256, "cfhead_m": 8192, "cfhead_t4": 256}    # runtime top-k per arm
+# (tile, cluster) per arm — T4/C64 is the paper's hit-table operating point
+CFHEAD_CACHE = {"cfhead_q": (8, 64), "cfhead_m": (8, 4), "cfhead_t4": (4, 64)}
 SUMMARY_FIELDS = ["task", "arm", "accuracy", "token_agr", "containment", "mean_candidates", "n"]
 
 
@@ -266,16 +268,20 @@ def cfhead_containment(rt: CFHeadRT, k: int, h_stack: torch.Tensor,
 
 @torch.no_grad()
 def mob_containment(head, codes_all, vid_to_tok, h_stack: torch.Tensor,
-                    orig_ids: torch.Tensor) -> tuple[int, int, float]:
+                    orig_ids: torch.Tensor, proposal_fn=None) -> tuple[int, int, float]:
     # NOTE (2026-09-19, post-hoc): the head forward is batched over all steps
     # (row-independent ops -> numerically identical to per-step calls, ~3x less
-    # launch overhead). propose_roundflip stays per-step (n_batch==1 API) and
-    # remains the cost pig of the original pass (~10-15s per MGSM sample).
+    # launch overhead). The proposal stays per-step (n_batch==1 API) and is the
+    # cost pig of the original pass; proposal_fn selects roundflip (default) or
+    # scoreflip. On big-budget runs pass --mob-containment off: containment for
+    # the scoreflip arm is already measured pair-wise in proposal_256_eval.
+    if proposal_fn is None:
+        proposal_fn = propose_roundflip
     hits, steps, sizes = 0, h_stack.shape[0], 0
     bl_all, pl_all = head(h_stack.float())
     log_pi_all = F.log_softmax(pl_all, dim=-1)
     for t in range(steps):
-        cand = propose_roundflip(bl_all[t:t + 1], log_pi_all[t:t + 1], codes_all, vid_to_tok)
+        cand = proposal_fn(bl_all[t:t + 1], log_pi_all[t:t + 1], codes_all, vid_to_tok)
         hits += int((cand == orig_ids[t]).any().item())
         sizes += cand.numel()
     return hits, steps, sizes / max(steps, 1)
@@ -284,22 +290,22 @@ def mob_containment(head, codes_all, vid_to_tok, h_stack: torch.Tensor,
 # ---------------------------------------------------------------------------
 # arm construction
 # ---------------------------------------------------------------------------
-def resolve_cfhead_cache(cache_dir: Path, clusters: int, required: bool) -> Path | None:
-    hits = sorted(cache_dir.glob(f"cfhead_v3_*_T8_C{clusters}_*.pt"))
+def resolve_cfhead_cache(cache_dir: Path, tile: int, clusters: int, required: bool) -> Path | None:
+    hits = sorted(cache_dir.glob(f"cfhead_v3_*_T{tile}_C{clusters}_*.pt"))
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
-        raise RuntimeError(f"ambiguous CFHead cache for C={clusters} in {cache_dir}: {hits}")
+        raise RuntimeError(f"ambiguous CFHead cache for T={tile} C={clusters} in {cache_dir}: {hits}")
     if required:
-        raise FileNotFoundError(f"no CFHead cache for C={clusters} in {cache_dir}")
+        raise FileNotFoundError(f"no CFHead cache for T={tile} C={clusters} in {cache_dir}")
     return None
 
 
 def build_cfhead_rt(cache_path: Path, weight: torch.Tensor, device: torch.device,
-                    clusters: int) -> CFHeadRT:
+                    tile: int, clusters: int) -> CFHeadRT:
     rt = CFHeadRT(cache_path, weight, device)
     meta = rt.meta
-    if meta.get("tile_size") != 8 or meta.get("cluster_size") != clusters:
+    if meta.get("tile_size") != tile or meta.get("cluster_size") != clusters:
         raise ValueError(f"cache {cache_path.name} meta mismatch: {meta}")
     if meta.get("vocab_size") != weight.shape[0]:
         raise ValueError(f"cache {cache_path.name} vocab {meta.get('vocab_size')} != model V {weight.shape[0]}")
@@ -365,9 +371,14 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
             cont = {}
             for arm, (rt, k) in cfhead_rts.items():
                 cont[arm] = cfhead_containment(rt, k, h_stack, orig_tok)
-            if mob_ctx is not None:
+            if mob_ctx is not None and args.mob_containment != "off":
                 head, codes_all, vid_to_tok = mob_ctx
-                cont["mob_cascade"] = mob_containment(head, codes_all, vid_to_tok, h_stack, orig_tok)
+                pfn = None
+                if args.mob_containment == "scoreflip":
+                    pfn = lambda bl, lp, ca, vt: propose_scoreflip(
+                        bl, lp, ca, vt, per_comp_cap=32, max_cand=256)
+                cont["mob_cascade"] = mob_containment(head, codes_all, vid_to_tok,
+                                                      h_stack, orig_tok, pfn)
             if diag_q_rt is not None and "cfhead_q" not in cont:
                 rt, k = diag_q_rt
                 cont["cfhead_q"] = cfhead_containment(rt, k, h_stack, orig_tok)
@@ -421,9 +432,9 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
     for arm, (rt, k) in cfhead_rts.items():
         arm_select[arm] = select_cfhead(rt, k)
     if mob_ctx is not None:
-        mob_head, mob_codes, mob_vid = mob_ctx
+        head, codes_all, vid_to_tok = mob_ctx
 
-        def select_mob(h, _head=mob_head, _codes=mob_codes, _vid=mob_vid, _e=e_weight):
+        def select_mob(h, _head=head, _codes=codes_all, _vid=vid_to_tok, _e=e_weight):
             hf = h.float()
             bl, pl = _head(hf)
             log_pi = F.log_softmax(pl, dim=-1)
@@ -431,6 +442,16 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
                                         proposal="roundflip", vid_to_tok=_vid)
 
         arm_select["mob_cascade"] = select_mob
+
+        def select_mob_sf(h, _head=head, _codes=codes_all, _vid=vid_to_tok, _e=e_weight):
+            hf = h.float()
+            bl, pl = _head(hf)
+            log_pi = F.log_softmax(pl, dim=-1)
+            return decode_rerank_native(bl, log_pi, _codes, _e, hf,
+                                        proposal="scoreflip", vid_to_tok=_vid,
+                                        adaptive_kwargs={"max_cand": 256, "per_comp_cap": 32})
+
+        arm_select["mob_scoreflip"] = select_mob_sf
 
     for arm in ARMS:
         if arm == "original" or arm not in args.arms_set or arm not in arm_select:
@@ -532,6 +553,12 @@ def parse_args():
                         "reference); it is only recorded when listed.")
     p.add_argument("--cfhead-q-k", type=int, default=CFHEAD_K["cfhead_q"])
     p.add_argument("--cfhead-m-k", type=int, default=CFHEAD_K["cfhead_m"])
+    p.add_argument("--cfhead-t4-k", type=int, default=CFHEAD_K["cfhead_t4"])
+    p.add_argument("--mob-containment", default="roundflip",
+                   choices=["roundflip", "scoreflip", "off"],
+                   help="MoB proposal used for the original-trajectory containment "
+                        "diagnostic; 'off' skips it (already measured pair-wise in "
+                        "proposal_256_eval) — the original pass then costs generation only")
     p.add_argument("--mob-k", type=int, default=128)
     p.add_argument("--mob-h", type=int, default=2048)
     p.add_argument("--mob-hidden", type=int, default=7300)
@@ -595,39 +622,31 @@ def main() -> int:
     cache_dir = Path(args.cfhead_cache_dir)
     cfhead_rts: dict[str, tuple[CFHeadRT, int]] = {}
     diag_q_rt = None
-    if "cfhead_q" in args.arms_set:
-        q_path = resolve_cfhead_cache(cache_dir, CFHEAD_CLUSTERS["cfhead_q"], True)
-        if q_path is None:
-            raise FileNotFoundError(f"no CFHead cache for C=64 in {cache_dir}")
-        cfhead_rts["cfhead_q"] = (
-            build_cfhead_rt(q_path, weight, device, CFHEAD_CLUSTERS["cfhead_q"]),
-            args.cfhead_q_k,
-        )
-        log(f"cfhead_q ready (k={args.cfhead_q_k}, cache={q_path.name})")
-    if "cfhead_m" in args.arms_set:
-        m_path = resolve_cfhead_cache(cache_dir, CFHEAD_CLUSTERS["cfhead_m"], True)
-        if m_path is None:
-            raise FileNotFoundError(f"no CFHead cache for C=4 in {cache_dir}")
-        cfhead_rts["cfhead_m"] = (
-            build_cfhead_rt(m_path, weight, device, CFHEAD_CLUSTERS["cfhead_m"]),
-            args.cfhead_m_k,
-        )
-        log(f"cfhead_m ready (k={args.cfhead_m_k}, cache={m_path.name})")
+    for arm in ("cfhead_q", "cfhead_m", "cfhead_t4"):
+        if arm not in args.arms_set:
+            continue
+        tile, clu = CFHEAD_CACHE[arm]
+        path = resolve_cfhead_cache(cache_dir, tile, clu, True)
+        assert path is not None  # required=True raises instead of returning None
+        k = {"cfhead_q": args.cfhead_q_k, "cfhead_m": args.cfhead_m_k,
+             "cfhead_t4": args.cfhead_t4_k}[arm]
+        cfhead_rts[arm] = (build_cfhead_rt(path, weight, device, tile, clu), k)
+        log(f"{arm} ready (k={k}, cache={path.name})")
     if "original" in args.arms_set and "cfhead_q" not in cfhead_rts:
         # diagnostic containment of the original trajectory against CFHead-Q
-        q_path = resolve_cfhead_cache(cache_dir, CFHEAD_CLUSTERS["cfhead_q"], False)
+        q_path = resolve_cfhead_cache(cache_dir, 8, 64, False)
         if q_path is not None:
-            diag_q_rt = (build_cfhead_rt(q_path, weight, device, CFHEAD_CLUSTERS["cfhead_q"]),
+            diag_q_rt = (build_cfhead_rt(q_path, weight, device, 8, 64),
                          args.cfhead_q_k)
             log("cfhead_q cache loaded for the original-arm containment diagnostic")
         else:
             log("cfhead_q cache absent -> original-arm containment diagnostic skipped")
 
     mob_ctx = None
-    if "mob_cascade" in args.arms_set:
+    if "mob_cascade" in args.arms_set or "mob_scoreflip" in args.arms_set:
         mob_ctx = build_mob(args, model, device)
-        log(f"mob_cascade ready (SwiGLU k={args.mob_k} hidden={args.mob_hidden} "
-            f"blocks={args.mob_blocks} m={mob_ctx[1].shape[1]}, roundflip+rerank)")
+        log(f"mob ready (SwiGLU k={args.mob_k} hidden={args.mob_hidden} "
+            f"blocks={args.mob_blocks} m={mob_ctx[1].shape[1]})")
 
     tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
     unknown_t = set(tasks) - set(TASKS)
