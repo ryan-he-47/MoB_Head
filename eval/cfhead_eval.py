@@ -52,7 +52,9 @@ def load_head(args, cb_m: int):
 
 def find_cfhead_caches(cache_dir: Path) -> dict[str, Path]:
     out = {}
-    for tag, pat in (("cfhead_q", "*_T8_C64_*.pt"), ("cfhead_m", "*_T8_C4_*.pt")):
+    for tag, pat in (("cfhead_q", "*_T8_C64_*.pt"),
+                     ("cfhead_t4", "*_T4_C64_*.pt"),
+                     ("cfhead_m", "*_T8_C4_*.pt")):
         hits = sorted(cache_dir.glob(pat))
         if hits:
             out[tag] = hits[0]
@@ -73,10 +75,10 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
         "nat_p1", "nat_ent", "nat_nll", "mob_nll", "mix_rank_nat1", "mix_rerank_agree",
         "mix_hit8", "round_recall", "round_rerank_agree",
         "rf_recall", "rf_hit8", "rf_rerank_agree", "rf_count",
-        "cfq_rank", "cfm_rank",
-        "cfq_fine32", "cfq_fine_def", "cfm_fine32", "cfm_fine_def",
+        "cfq_rank", "cfm_rank", "cft4_rank",
+        "cfq_fine32", "cfq_fine_def", "cfm_fine32", "cfm_fine_def", "cft4_fine32", "cft4_fine_def",
     )}
-    k_def = {"cfq": 256, "cfm": 8192}
+    k_def = {"cfq": 256, "cft4": 256, "cfm": 8192}
     t_start = time.perf_counter()
 
     for i in range(0, n_chunks, args.batch):
@@ -154,7 +156,9 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
 
             # CFHead arms
             hh = h[pc]
-            for key, rt in (("cfq", cf.get("cfhead_q")), ("cfm", cf.get("cfhead_m"))):
+            for key, rt in (("cfq", cf.get("cfhead_q")),
+                            ("cft4", cf.get("cfhead_t4")),
+                            ("cfm", cf.get("cfhead_m"))):
                 if rt is None:
                     continue
                 coarse = rt.coarse(hh)                                   # [pc,V] fp32
@@ -223,7 +227,7 @@ def run_source(name: str, dev: np.ndarray, model, head, codes_all, vid_to_tok,
             "mean_candidates": float(d["rf_count"].mean()),
             "p95_candidates": float(np.quantile(d["rf_count"], 0.95)),
         }
-    for key, label in (("cfq", "cfhead_q"), ("cfm", "cfhead_m")):
+    for key, label in (("cfq", "cfhead_q"), ("cft4", "cfhead_t4"), ("cfm", "cfhead_m")):
         rk = f"{key}_rank"
         if rk not in d:
             continue
