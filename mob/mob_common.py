@@ -208,6 +208,122 @@ def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
     return torch.cat(cands)
 
 
+def propose_varflip(bit_logits, log_pi, codes_all, vid_to_tok, alpha=0.15,
+                    u_max=12, per_comp_cap=16, max_cand=256):
+    """Variance-ranked full-scope flip proposal (user design 2026-09-19):
+    1) modes of ALL K components, deduped (component modes DO collide —
+       converged low-pi clones share vertices; the plain vectorized round-32
+       path never deduped, roundflip/adaptive do);
+    2) flip enumeration in DESCENDING total-bit-variance order
+       (sum_m p(1-p)) — most diffuse component first;
+    3) per-component cap, live dedup, global budget max_cand.
+    n_batch==1 only. Returns candidate token ids [C], C <= max_cand."""
+    m = bit_logits.shape[-1]
+    shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
+    probs = bit_logits[0].sigmoid()                              # [K,m]
+    seen = torch.zeros(1 << m, dtype=torch.bool, device=bit_logits.device)
+    cands, total = [], 0
+    mode_toks = vid_to_tok[((bit_logits[0] > 0).long() * shifts).sum(-1)]
+    mode_toks = mode_toks[mode_toks >= 0]
+    if mode_toks.numel():
+        new = mode_toks[~seen[mode_toks]]
+        cands.append(new)
+        seen[new] = True
+        total += new.numel()
+    var_order = (probs * (1 - probs)).sum(-1).argsort(descending=True)
+    for k in var_order.tolist():
+        if total >= max_cand:
+            break
+        p = probs[k]
+        unc = ((p - 0.5).abs() <= alpha).nonzero(as_tuple=True)[0]
+        u = min(unc.numel(), u_max)
+        unc = unc[:u]
+        if u == 0:
+            continue
+        base = (p > 0.5).long()
+        base[unc] = 0
+        base_vid = (base * shifts).sum()
+        combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
+                   >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
+        # user refinement (2026-09-19): combo priority = SUM of flipped-bit
+        # variances, descending. Since var = sigmoid(z)(1-sigmoid(z)) is
+        # strictly decreasing in |z|, this IS the per-component exact
+        # likelihood order (flip the cheapest bits first), tighter than the
+        # hamming-count order used by roundflip/adaptive.
+        prio = (combos.float() * (p[unc] * (1 - p[unc]))).sum(-1)
+        vids = base_vid + (combos[prio.argsort(descending=True)] * shifts[unc]).sum(-1)
+        toks = vid_to_tok[vids]
+        toks = toks[toks >= 0]
+        new = toks[~seen[toks]]
+        take = int(min(new.numel(), per_comp_cap, max_cand - total))
+        if take > 0:
+            cands.append(new[:take])
+            seen[new[:take]] = True
+            total += take
+    if not cands:
+        return torch.empty(0, dtype=torch.long, device=bit_logits.device)
+    return torch.cat(cands)
+
+
+def propose_scoreflip(bit_logits, log_pi, codes_all, vid_to_tok, alpha=0.25,
+                      u_max=12, per_comp_cap=32, max_cand=256, mass=0.99):
+    """'Propose liberally, rescore exactly, truncate by score' (2026-09-19):
+    components covering `mass` of pi emit modes + uncertain-bit flip lattices
+    (hamming-first); the pooled deduped candidates are rescored with the EXACT
+    mixture logprob (logsumexp_k(log_pi_k + logBern)) and truncated to
+    max_cand BY SCORE. Approximates mixture_topk without the [V,K] ranking
+    GEMM — emission breadth from the flip lattices, ranking from the exact
+    density. n_batch==1 only. Returns candidate token ids [<=max_cand]."""
+    m = bit_logits.shape[-1]
+    shifts = (1 << torch.arange(m - 1, -1, -1, device=bit_logits.device)).long()
+    probs = bit_logits[0].sigmoid()
+    pi = log_pi[0].exp()
+    order = pi.argsort(descending=True)
+    n_sel = max(int((pi[order].cumsum(0) < mass).sum().item()) + 1, 1)
+    sel = order[:n_sel]
+    seen = torch.zeros(1 << m, dtype=torch.bool, device=bit_logits.device)
+    cands, total = [], 0
+    pool_cap = 8 * max_cand
+    for k in sel.tolist():
+        if total >= pool_cap:
+            break
+        p = probs[k]
+        unc = ((p - 0.5).abs() <= alpha).nonzero(as_tuple=True)[0]
+        u = min(unc.numel(), u_max)
+        unc = unc[:u]
+        base = (p > 0.5).long()
+        if u == 0:
+            vids = base.dot(shifts).view(1)
+        else:
+            base = base.clone()
+            base[unc] = 0
+            base_vid = (base * shifts).sum()
+            combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
+                       >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
+            prio = (combos.float() * (p[unc] * (1 - p[unc]))).sum(-1)  # see varflip note
+            vids = base_vid + (combos[prio.argsort(descending=True)] * shifts[unc]).sum(-1)
+        toks = vid_to_tok[vids]
+        toks = toks[toks >= 0]
+        new = toks[~seen[toks]]
+        take = int(min(new.numel(), per_comp_cap, pool_cap - total))
+        if take > 0:
+            cands.append(new[:take])
+            seen[new[:take]] = True
+            total += take
+    if not cands:
+        return torch.empty(0, dtype=torch.long, device=bit_logits.device)
+    pooled = torch.cat(cands)
+    if pooled.numel() <= max_cand:
+        return pooled
+    # exact mixture rescoring of the pool: [C,K] @ constants, logsumexp over K
+    codes_c = codes_all[pooled]                                  # [C,M] 0/1
+    z = bit_logits[0]                                            # [K,M]
+    term = codes_c @ z.T                                         # [C,K]
+    base_k = F.logsigmoid(-z).sum(-1)                            # [K]
+    score = torch.logsumexp(log_pi[0].unsqueeze(0) + term + base_k.unsqueeze(0), dim=-1)
+    return pooled[score.topk(max_cand).indices]
+
+
 def ecc_parity_matrix(m, p, seed=123, device="cpu"):
     g = torch.Generator().manual_seed(seed)
     return (torch.rand((p, m), generator=g, device=device) < 0.5).float()
