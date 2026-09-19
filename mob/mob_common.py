@@ -293,7 +293,7 @@ def propose_scoreflip(bit_logits, log_pi, codes_all, vid_to_tok, alpha=0.25,
         unc = unc[:u]
         base = (p > 0.5).long()
         if u == 0:
-            vids = base.dot(shifts).view(1)
+            vids = (base * shifts).sum().view(1)
         else:
             base = base.clone()
             base[unc] = 0
