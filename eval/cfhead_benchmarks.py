@@ -344,79 +344,96 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
 
     lm_head = model.get_output_embeddings()
 
+    # ---- resume support (crash-proofing, 2026-09-19): per-task originals are
+    # pickled (rows + token ids + containment tuples); completed arm JSONLs are
+    # skipped. A task's arms re-run only if its own file is missing/incomplete.
+    import pickle
+
+    orig_pkl = out_dir / f"_orig_{task}.pkl"
+    if orig_pkl.exists():
+        with orig_pkl.open("rb") as f:
+            orig_rows, orig_info = pickle.load(f)
+        log(f"[{task}] original pass resumed from {orig_pkl.name} "
+            f"({len(orig_rows)} samples)")
+    else:
+        orig_rows, orig_info = None, None
+
     def select_original(h):
         return lm_head(h).argmax(-1)
 
     # ---- Original pass (always run: it is the agreement/containment reference) ----
     t0 = time.perf_counter()
-    orig_rows = []
-    orig_info = []   # per-sample reference data for the arm passes
-    orig_path = out_dir / f"{task}_original.jsonl"
-    orig_fh = orig_path.open("w", encoding="utf-8") if "original" in args.arms_set else None
-    try:
-        for idx, row in enumerate(samples):
-            prompt = format_prompt(tokenizer, row)
-            enc = tokenizer(prompt, return_tensors="pt")
-            input_ids = enc["input_ids"].to(device)
-            attn = enc["attention_mask"].to(device)
-            gen_ids, h_stack = greedy_generate(model, input_ids, attn, max_new,
-                                               eos_tensor, fill_id, select_original,
-                                               collect_hidden=True)
-            ids = gen_ids[0].detach().cpu().tolist()
-            output = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-            pred, gold, correct = score_row(output, str(row.get("target", "")), answer_type)
+    if orig_rows is None:
+        orig_rows = []
+        orig_info = []   # per-sample reference data for the arm passes
+        orig_path = out_dir / f"{task}_original.jsonl"
+        orig_fh = orig_path.open("w", encoding="utf-8") if "original" in args.arms_set else None
+        try:
+            for idx, row in enumerate(samples):
+                prompt = format_prompt(tokenizer, row)
+                enc = tokenizer(prompt, return_tensors="pt")
+                input_ids = enc["input_ids"].to(device)
+                attn = enc["attention_mask"].to(device)
+                gen_ids, h_stack = greedy_generate(model, input_ids, attn, max_new,
+                                                   eos_tensor, fill_id, select_original,
+                                                   collect_hidden=True)
+                ids = gen_ids[0].detach().cpu().tolist()
+                output = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+                pred, gold, correct = score_row(output, str(row.get("target", "")), answer_type)
 
-            # containment of every requested arm's candidate set on THIS trajectory
-            orig_tok = gen_ids[0].detach()
-            cont = {}
-            for arm, (rt, k) in cfhead_rts.items():
-                cont[arm] = cfhead_containment(rt, k, h_stack, orig_tok)
-            if mob_ctx is not None and args.mob_containment != "off":
-                head, codes_all, vid_to_tok = mob_ctx
-                pfn = None
-                if args.mob_containment == "scoreflip":
-                    pfn = lambda bl, lp, ca, vt: propose_scoreflip(
-                        bl, lp, ca, vt, per_comp_cap=32, max_cand=256)
-                cont["mob_cascade"] = mob_containment(head, codes_all, vid_to_tok,
-                                                      h_stack, orig_tok, pfn)
-            if diag_q_rt is not None and "cfhead_q" not in cont:
-                rt, k = diag_q_rt
-                cont["cfhead_q"] = cfhead_containment(rt, k, h_stack, orig_tok)
+                # containment of every requested arm's candidate set on THIS trajectory
+                orig_tok = gen_ids[0].detach()
+                cont = {}
+                for arm, (rt, k) in cfhead_rts.items():
+                    cont[arm] = cfhead_containment(rt, k, h_stack, orig_tok)
+                if mob_ctx is not None and args.mob_containment != "off":
+                    head, codes_all, vid_to_tok = mob_ctx
+                    pfn = None
+                    if args.mob_containment == "scoreflip":
+                        pfn = lambda bl, lp, ca, vt: propose_scoreflip(
+                            bl, lp, ca, vt, per_comp_cap=32, max_cand=256)
+                    cont["mob_cascade"] = mob_containment(head, codes_all, vid_to_tok,
+                                                          h_stack, orig_tok, pfn)
+                if diag_q_rt is not None and "cfhead_q" not in cont:
+                    rt, k = diag_q_rt
+                    cont["cfhead_q"] = cfhead_containment(rt, k, h_stack, orig_tok)
 
-            rec = {
-                "task": task,
-                "arm": "original",
-                "sample_id": row.get("sample_id"),
-                "prediction": pred,
-                "gold": gold,
-                "correct": correct,
-                "output": output,
-                "n_tokens": int(gen_ids.shape[1]),
-                "token_agreement": 1.0,
-                "lcp_agreement": 1.0,
-                # diagnostic: containment of the original argmax in the
-                # CFHead-Q (C=64, k=256) coarse candidate set
-                "containment": (cont["cfhead_q"][0] / cont["cfhead_q"][1]) if "cfhead_q" in cont else None,
-                "containment_scope": "cfhead_q" if "cfhead_q" in cont else None,
-                "containment_hits": cont["cfhead_q"][0] if "cfhead_q" in cont else 0,
-                "containment_steps": cont["cfhead_q"][1] if "cfhead_q" in cont else 0,
-                "mean_candidates": cont["cfhead_q"][2] if "cfhead_q" in cont else None,
-                "containment_cfhead_m": (cont["cfhead_m"][0] / cont["cfhead_m"][1]) if "cfhead_m" in cont else None,
-                "containment_mob_cascade": (cont["mob_cascade"][0] / cont["mob_cascade"][1]) if "mob_cascade" in cont else None,
-                "mean_candidates_mob": cont["mob_cascade"][2] if "mob_cascade" in cont else None,
-            }
-            if "in_fewshot_demos" in row:
-                rec["in_fewshot_demos"] = row["in_fewshot_demos"]
-            orig_rows.append(rec)
+                rec = {
+                    "task": task,
+                    "arm": "original",
+                    "sample_id": row.get("sample_id"),
+                    "prediction": pred,
+                    "gold": gold,
+                    "correct": correct,
+                    "output": output,
+                    "n_tokens": int(gen_ids.shape[1]),
+                    "token_agreement": 1.0,
+                    "lcp_agreement": 1.0,
+                    # diagnostic: containment of the original argmax in the
+                    # CFHead-Q (C=64, k=256) coarse candidate set
+                    "containment": (cont["cfhead_q"][0] / cont["cfhead_q"][1]) if "cfhead_q" in cont else None,
+                    "containment_scope": "cfhead_q" if "cfhead_q" in cont else None,
+                    "containment_hits": cont["cfhead_q"][0] if "cfhead_q" in cont else 0,
+                    "containment_steps": cont["cfhead_q"][1] if "cfhead_q" in cont else 0,
+                    "mean_candidates": cont["cfhead_q"][2] if "cfhead_q" in cont else None,
+                    "containment_cfhead_m": (cont["cfhead_m"][0] / cont["cfhead_m"][1]) if "cfhead_m" in cont else None,
+                    "containment_mob_cascade": (cont["mob_cascade"][0] / cont["mob_cascade"][1]) if "mob_cascade" in cont else None,
+                    "mean_candidates_mob": cont["mob_cascade"][2] if "mob_cascade" in cont else None,
+                }
+                if "in_fewshot_demos" in row:
+                    rec["in_fewshot_demos"] = row["in_fewshot_demos"]
+                orig_rows.append(rec)
+                if orig_fh is not None:
+                    orig_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                orig_info.append({"ids": ids, "output": output, "cont": cont})
+                if (idx + 1) % 16 == 0 or idx == len(samples) - 1:
+                    log(f"  [{task}/original] {idx + 1}/{len(samples)} ({time.perf_counter() - t0:.1f}s)")
+        finally:
             if orig_fh is not None:
-                orig_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            orig_info.append({"ids": ids, "output": output, "cont": cont})
-            if (idx + 1) % 16 == 0 or idx == len(samples) - 1:
-                log(f"  [{task}/original] {idx + 1}/{len(samples)} ({time.perf_counter() - t0:.1f}s)")
-    finally:
-        if orig_fh is not None:
-            orig_fh.close()
-    log(f"[{task}] original pass done ({time.perf_counter() - t0:.1f}s)")
+                orig_fh.close()
+        with orig_pkl.open("wb") as f:
+            pickle.dump((orig_rows, orig_info), f)
+        log(f"[{task}] original pass done ({time.perf_counter() - t0:.1f}s)")
 
     summary = []
     if "original" in args.arms_set:
@@ -458,7 +475,20 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
             continue
         t0 = time.perf_counter()
         rows = []
-        with (out_dir / f"{task}_{arm}.jsonl").open("w", encoding="utf-8") as fh:
+        arm_path = out_dir / f"{task}_{arm}.jsonl"
+        # resume: skip arms whose JSONL already covers the full sample list
+        if arm_path.exists():
+            try:
+                rows = [json.loads(ln) for ln in arm_path.open(encoding="utf-8") if ln.strip()]
+            except Exception:
+                rows = []
+            if len(rows) == len(samples):
+                log(f"[{task}] {arm} resumed from {arm_path.name} ({len(rows)} rows)")
+                summary.append(summarize(task, arm, rows))
+                continue
+            log(f"[{task}] {arm} partial file ({len(rows)}/{len(samples)}) -> regenerate")
+            rows = []
+        with arm_path.open("w", encoding="utf-8") as fh:
             for idx, row in enumerate(samples):
                 prompt = format_prompt(tokenizer, row)
                 enc = tokenizer(prompt, return_tensors="pt")
@@ -471,7 +501,8 @@ def run_task(task: str, args, model, tokenizer, device: torch.device,
                 pred, gold, correct = score_row(output, str(row.get("target", "")), answer_type)
                 o = orig_info[idx]
                 ta, lcp = agreement_metrics(ids, o["ids"])
-                ch, cs, mc = o["cont"][arm]
+                ce = o["cont"].get(arm)
+                ch, cs, mc = ce if ce is not None else (0, 0, None)
                 rec = {
                     "task": task,
                     "arm": arm,
