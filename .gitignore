@@ -34,3 +34,5 @@ generation/
 data/bench_data/
 data/qwen35/
 ~$*
+data/codebook_qwen35_hidra_*.npz
+data/tree_unbalanced_*.npz

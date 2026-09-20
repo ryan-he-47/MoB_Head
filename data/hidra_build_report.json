@@ -1,0 +1,34 @@
+{
+  "model": "models/Qwen3.5-2B",
+  "pca_dim": 128,
+  "var_captured": 0.12425922602415085,
+  "seed": 42,
+  "arms": {
+    "ours_2means": {
+      "corr_hamming_cosine": 0.04167851836374712,
+      "nn_hamming_mean": 7.81,
+      "nn_hamming_median": 8.0
+    },
+    "lda": {
+      "corr_hamming_cosine": 0.04313732498901146,
+      "nn_hamming_mean": 7.994,
+      "nn_hamming_median": 8.0,
+      "vs_ours_hamming_mean": 9.40943137886598,
+      "vs_ours_exact_match": 8.054123711340206e-06
+    },
+    "pca": {
+      "corr_hamming_cosine": 0.044983841374151054,
+      "nn_hamming_mean": 8.122,
+      "nn_hamming_median": 8.0,
+      "vs_ours_hamming_mean": 8.285792525773196,
+      "vs_ours_exact_match": 2.8189432989690723e-05
+    },
+    "means": {
+      "corr_hamming_cosine": 0.04566877044989907,
+      "nn_hamming_mean": 7.944,
+      "nn_hamming_median": 8.0,
+      "vs_ours_hamming_mean": 9.52800418814433,
+      "vs_ours_exact_match": 0.0
+    }
+  }
+}
