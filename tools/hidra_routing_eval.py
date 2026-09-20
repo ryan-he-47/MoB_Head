@@ -1,4 +1,4 @@
-"""HiDRA-style routing evaluation (docs/29 task 1, GPU part — run when GPU free).
+"""HiDRA-style routing evaluation (docs/31 task 1, GPU part — run when GPU free).
 
 Routes teacher-forced hidden states through the per-node hyperplanes of a
 tree codebook (built by tools/hidra_codebook.py) and measures:

@@ -9,7 +9,7 @@ direction is the raw 2-means centroid difference mu_R - mu_L (i.e. LDA with
 S_w = I). So the scientific delta being measured here is: does within-class
 whitening of the split direction improve the resulting binary codes?
 
-Practical adaptations (documented in docs/29):
+Practical adaptations (documented in docs/31):
   - All computation in a global top-D' PCA subspace of the (unit-normed)
     embedding table: per-node 2048x2048 covariances are ill-posed for small
     nodes and infeasible at scale. PCA + shrinkage is the standard practical

@@ -1,4 +1,4 @@
-"""Unbalanced semantic tree exploration (docs/29 task 2): what does the
+"""Unbalanced semantic tree exploration (docs/31 task 2): what does the
 embedding-bisection tree look like if we do NOT enforce the median-balanced
 cut? Pure 2-means natural splits, recursed to singletons (or a depth cap).
 
