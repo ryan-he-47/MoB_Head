@@ -17,6 +17,9 @@ from pathlib import Path
 
 import torch
 
+from eval.cfhead_kernels import TRITON_AVAILABLE
+from eval import cfhead_kernels
+
 COARSE_CHUNK_TILES = 32
 
 
@@ -39,6 +42,8 @@ class CFHeadRT:
         N, V, C = self.num_tiles, self.vocab_size, self.codebook.shape[1]
         h = hidden.reshape(B, N, self.tile).float()
         lut = torch.einsum("bnt,nct->bnc", h, self.codebook)  # [B, N, C]
+        if TRITON_AVAILABLE and hidden.is_cuda:
+            return cfhead_kernels.coarse_triton(lut, self.index_t_u8)
         coarse = torch.zeros(B, V, device=hidden.device, dtype=torch.float32)
         for start in range(0, N, COARSE_CHUNK_TILES):
             end = min(start + COARSE_CHUNK_TILES, N)
