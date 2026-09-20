@@ -192,6 +192,23 @@ HF 数据路径：`load_or_pack_tokens_hf` 流式拉取 + 批量分词 + EOS 拼
 26. **batch 是吞吐杠杆也是配方变量**：batch-8 出身本地 8GB 卡，V100 上只用 ~28% 显存；提 batch 时 LR 按 √2 缩且不出实测舒适带；改配方撤单重挂要在汇报里写明（556232 被计划内 scancel 被误读成崩溃）。
 27. **重组后入口一律 `python -m <pkg>.<mod>`**：按路径跑脚本会让包导入炸（slurm_qwen35_distill 初版和本地测试各忘一次）。
 
+### 7.7 2026-09-18~20 增补（CFHead 对打 + 优化周）
+
+**CFHead 侧**：`tools/build_cfhead_cache.py`（忠实移植其 k-means 构建，seed99/iters10，缓存格式互通可互载；嵌入键嵌套兜底 `model.language_model.embed_tokens.weight`）；`eval/cfhead_rt.py`（共享运行时：LUT+gather 粗分（fp32）+ 精确细阶段 GEMV，与仓库 select 逐位一致，并列翻转按仓库 masked_fill/min 语义）；`eval/cfhead_kernels.py`（vendored 其 Triton 粗/细核，`cfhead_rt.coarse` 在有 triton 且 CUDA 时自动走快路）。
+
+**对打 harness 三件套**：`eval/cfhead_eval.py`（教师强制配对：CFHead containment k 扫描 + MoB 密度/提议/级联 + p1 四分桶；bf16 logits 基座 + 逐块 fp32 cast 的 VRAM 节食；进度行 pos/s+ETA+显存；roundflip 默认关）；`eval/cfhead_benchmarks.py`（MGSM/MMLU/GSM8K/ARC-C × original/CFHead 三档/MoB 两臂；containment 记账可关（`--mob-containment off`）；**断点续跑**：original pass 落 `_orig_{task}.pkl`、臂级 JSONL 完整即跳）；`eval/cfhead_longform.py`（6×8192 自轨迹 + 原生 fp32 shadow + 复读分桶）。
+
+**解码策略实验**：`eval/proposal_256_eval.py`（256 预算五臂对打 + 精确集合覆盖率）；`eval/sampling_shape_eval.py`（采样形状：mass(C)/覆盖曲线/worst-casualty/分桶漏失/nucleus 包含率/T=1.0&0.7）；`mob/cpu_proposals.py`（**numba CPU 版 scoreflip/roundflip**，packed uint32 码本 1.3MB，与 torch 参考集合等价 100/100）；`tools/bench_offload.py`（CPU-offload 拆分延迟：GPU 粗筛→KB 传输→CPU 提议+RAM 取行 GEMV）。
+
+### 7.8 新坑增补（编号续 §7.6）
+
+28. **triton-windows 是 Windows 上免 MSVC 的 CUDA 扩展替代**（3.8.0 在 4060/cu130 直接可用，7.8× 于 torch 兜底）——但属非官方 fork，生产慎用，集群走官方 triton。
+29. **numba 的 np.argpartition 会段错误**（exit -1073741819 无任何输出）——全排序替代，别在这上面省时间。
+30. **benchmark 数据要先验 gold 再开跑**（MGSM parquet answer 列 100% NaN 事故）：smoke 必须打印一条 gold+pred 对，全 False/全 0 先查数据再怪模型。
+31. **PowerShell `Add-Content` 按 GBK 写 UTF-8 文件**（docs 直接花掉）——文件写入用 `[IO.File]::AppendAllText($p,$t,(New-Object Text.UTF8Encoding($false)))` 或编辑工具。
+32. **edit 工具在长表格行上锚定行首会吃掉前缀**（docs/12 三连犯）——编辑后必须重读该行验证。
+33. **combo 位序参考实现是 u-1-j**（combo 高位 ↔ 前序不确定位）——移植枚举算法时对源逐字核对，集合相同≠选择相同。
+
 ## 8. 扩展指引
 
 - **换容量**：`--k/--width`（+ 评测脚本同步）；K=128 时 n_eff 只有 ~74-89，提示分量数可能偏多，升 K 前先看 n_eff。
