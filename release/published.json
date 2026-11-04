@@ -58,5 +58,20 @@
       "config.json",
       "model.safetensors"
     ]
+  },
+  {
+    "repo_id": "ryan1145/Llama-MoB-3.2-1B-MLP",
+    "url": "https://huggingface.co/ryan1145/Llama-MoB-3.2-1B-MLP",
+    "revision": "aeabd45ee3f80a9c44accfa51ec14902c3c7aa79",
+    "verified_files": [
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "USE_POLICY.md",
+      "artifact_manifest.json",
+      "codebook.npz",
+      "config.json",
+      "model.safetensors"
+    ]
   }
 ]
