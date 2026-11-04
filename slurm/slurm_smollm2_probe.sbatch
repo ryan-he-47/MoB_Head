@@ -6,15 +6,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=0-12:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/smollm2_probe_%j.out
+#SBATCH --output=logs/slurm_smollm2_probe_%j.out
 
-# Frankenstein-hypothesis probe (docs/17): SmolLM2-1.7B (NATIVELY trained) as
+# Frankenstein-hypothesis probe (docs/01-method.md): SmolLM2-1.7B (NATIVELY trained) as
 # the subject — identical distillation recipe as the Llama WSD run, 50k steps.
 # Metrics are self-normalizing per model (PPL ratio vs its own native head),
 # so the trajectory is directly comparable with the Llama line.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train \

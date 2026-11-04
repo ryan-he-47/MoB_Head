@@ -6,17 +6,17 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/p5_twin_%j.out
+#SBATCH --output=logs/slurm_p5_twin_%j.out
 
-# P5 / Rung-3 from-scratch twin pretrain (docs/15, user-approved 2026-09-05).
+# P5 / Rung-3 from-scratch twin pretrain (docs/01-method.md).
 # Usage: sbatch slurm_p5_twin.sbatch {native|mob}
 # Two identical 212M Llama-mini models, full fp32, same seed/data order,
 # differ ONLY in the output head. 60k steps x batch 16 x 512 = 0.49B tokens.
 # NOTE: gpu-v100s-06 excluded — known-bad node (jobs land there and never get
-# the GPU; user report 2026-09-05).
+
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 HEAD_TYPE=$1
 
 nvidia-smi

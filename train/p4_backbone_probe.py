@@ -1,4 +1,4 @@
-# P4 feasibility probe (docs/14 section 4, user decision 2026-09-03):
+# P4 feasibility probe (docs/01-method.md):
 # can the PURE MoB-NLL loss (no teacher) train the BACKBONE through the
 # 17-bit code bottleneck? System: Llama-3.2-1B fp16 + WSD final MoB head fp32,
 # native lm_head unused. Loss = -log p_mix(code(gt)) + small pi-entropy reg
@@ -23,7 +23,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from mob.mob_common import H, M, MoBHead, mob_mix_logprob, decode_rerank_native
 
-ROOT = r"E:\Trash_things\llm_codec"
+ROOT = r"."
 MODEL_DIR = os.path.join(ROOT, "LLM-Research--Llama-3.2-1B", "snapshots", "master")
 CACHE = os.path.join(ROOT, "data", "fineweb_probe_tokens.npz")
 PROMPTS = ["The little boy was playing with", "My mother said I should"]

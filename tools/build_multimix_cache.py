@@ -1,5 +1,5 @@
 # Build the Qwen3.5 multilingual+code+instruct interleaved token cache.
-# Mix (user decision 2026-09-14): EN 50% / ZH 30% / Code 15% / Instruct 5%,
+# Mix (): EN 50% / ZH 30% / Code 15% / Instruct 5%,
 # ~2B tokens total, document-level interleave (seeded), per-source dev caches
 # held out BEFORE mixing. Emits into the scratch dir:
 #   qwen35_mix_train_tokens.npy  (int32, ~2B)
@@ -77,7 +77,7 @@ def texts_code(root):
         for batch in pf.iter_batches(batch_size=100, columns=["files"]):
             for repo_files in batch.column("files").to_pylist():
                 for f in repo_files:
-                    # license filter WAIVED (user ruling 2026-09-15): non-commercial
+                    # license filter WAIVED (): non-commercial
                     # research, all outputs open-source; the 14% permissive slice
                     # starved the code budget to 1/9 of target. Language whitelist
                     # stays - it is a relevance filter, not a legal one.
@@ -140,8 +140,8 @@ def tokenize_source(name, gen, tok, budget, eos, dev_tokens, log_every=20000):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default="/gpfs1/scratch/yihe47/qwen35")
-    ap.add_argument("--model-dir", default="/gpfs1/scratch/yihe47/qwen35/models/Qwen3.5-2B")
+    ap.add_argument("--root", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), ""))
+    ap.add_argument("--model-dir", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "models/Qwen3.5-2B"))
     ap.add_argument("--total", type=int, default=TOTAL_BUDGET)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()

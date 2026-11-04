@@ -1,4 +1,4 @@
-# Generation-side PPL for the decode paths (user question 2026-09-02):
+
 # "perplexity of the rerank output" = perplexity of greedy continuations UNDER
 # THE NATIVE HEAD. The cascade is a decode path, not a density over V, so a
 # restricted 32-way softmax PPL would be trivially optimistic (p' = p/mass32);
@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from mob.mob_common import H, M, MoBHead, decode_mixture_argmax, decode_rerank_native
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
 PROMPTS = [
     "The little boy was playing with",
     "Once upon a time there was a",
@@ -26,14 +26,14 @@ GEN = 64
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt")
+    ap.add_argument("--head", default=r".\runs\head_latest_wsd.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
     model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16).cuda().eval()
-    cb = np.load(r"E:\Trash_things\llm_codec\data\codebook.npz")
+    cb = np.load(r".\data\codebook.npz")
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
     head = MoBHead(k=args.k, width=args.width).cuda()
     head.load_state_dict(torch.load(args.head))

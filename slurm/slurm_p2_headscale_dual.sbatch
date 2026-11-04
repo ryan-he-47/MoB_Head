@@ -6,15 +6,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/headscale_dual_%j.out
+#SBATCH --output=logs/slurm_p2_headscale_dual_%j.out
 
-# Dual-arm head scale-up (user idea 2026-09-05): wide 4096x3 vs deep 3072x5
+
 # (~51M each) distilled side by side on ONE frozen Llama backbone — shared
 # backbone forward (~1.2x cost of a single run) and identical batch stream
 # (paired comparison). Recipe = WSD proven in job 520825.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train_dual \

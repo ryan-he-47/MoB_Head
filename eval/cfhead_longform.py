@@ -1,5 +1,5 @@
 # Long-form autoregressive head-to-head: native vs CFHead-Q vs CFHead-M vs
-# MoB cascade on Qwen3.5-2B (docs/26-cfhead-headtohead-plan.md section 3,
+# MoB cascade on Qwen3.5-2B (docs/01-method.md,
 # protocol A). J4 of the head-to-head plan.
 #
 # Protocol ported from the CFHead reproduction (E:/CFHead/CFHead/repro/
@@ -16,14 +16,14 @@
 #     context is the ground truth for THAT trajectory. It is computed as an
 #     fp32 shadow matmul from hidden_states[-1][:, -1] against a resident fp32
 #     copy of the tied lm_head weight (fp32 because bf16 logit ties are
-#     frequent, docs/09 section 6.1; [1,V] fp32 output ~1 MB, no chunking
+#     frequent, docs/01-method.md; [1,V] fp32 output ~1 MB, no chunking
 #     needed at batch 1).
 #       - hit       = native argmax in the arm's candidate set
 #                     (native arm: candidate set = CFHead-Q coarse top-256 on
 #                     the native trajectory -- the paper's Table-II
 #                     containment).
 #       - agreement = the arm's chosen token == native argmax.
-#   * Repetition bucketing (docs/25 appendix C anti-confound): a step is
+#   * Repetition bucketing (docs/01-method.md): a step is
 #     `repeat` if the chosen token already appeared in the previous
 #     `--repeat-window` generated tokens of the same trajectory, else `novel`;
 #     hit/agreement are reported split by bucket.
@@ -49,6 +49,8 @@
 #   python -m eval.cfhead_longform --steps 8192
 from __future__ import annotations
 
+import os
+
 import argparse
 import gc
 import json
@@ -65,7 +67,7 @@ import torch.nn.functional as F
 from eval.cfhead_rt import CFHeadRT
 from mob.mob_common import SwiGLUHead, decode_rerank_native, propose_roundflip
 
-SCRATCH = "/gpfs1/scratch/yihe47/qwen35"
+SCRATCH = os.path.join(os.environ.get("MOB_SCRATCH", "."), "")
 CFHEAD_Q_CACHE_NAME = "cfhead_v3_V248320_H2048_T8_C64_K256_iters10_seed99_bfloat16.pt"
 CFHEAD_M_CACHE_NAME = "cfhead_v3_V248320_H2048_T8_C4_K256_iters10_seed99_bfloat16.pt"
 ALL_ARMS = ("native", "cfhead_q", "cfhead_m", "mob_cascade")

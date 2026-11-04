@@ -1,5 +1,5 @@
 # Plot dev_top1_agree / dev_nll trajectories: WSD (job 520825) vs cosine (519759),
-# with WSD LR overlay and decay-onset marker. User observation 2026-09-03:
+
 # agree plateaued ~0.72 through 100k-150k, climbed from decay start, still
 # rising at the end. Output: runs/wsd_vs_cosine_curve.png
 import json
@@ -27,8 +27,8 @@ def load(path):
             np.array(lr_s), np.array(lr_v))
 
 
-wsd = load(r"E:\Trash_things\llm_codec\runs\train_log_wsd.jsonl")
-cos = load(r"E:\Trash_things\llm_codec\runs\p2_fineweb_full\train_log.jsonl")
+wsd = load(r".\runs\train_log_wsd.jsonl")
+cos = load(r".\runs\p2_fineweb_full\train_log.jsonl")
 
 # decay onset from the LR trace: first step AFTER the peak where lr < 0.999*peak
 peak = wsd[4].max()
@@ -63,7 +63,7 @@ ax.set_xlabel("step (k)")
 ax.legend(loc="upper right")
 ax.grid(alpha=0.3)
 fig.tight_layout()
-out = r"E:\Trash_things\llm_codec\runs\wsd_vs_cosine_curve.png"
+out = r".\runs\wsd_vs_cosine_curve.png"
 fig.savefig(out, dpi=150)
 print("saved", out)
 

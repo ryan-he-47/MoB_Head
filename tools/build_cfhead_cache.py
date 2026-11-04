@@ -1,16 +1,5 @@
-"""Build CFHead-compatible tile-wise k-means caches for any model's tied LM head.
-
-Faithful port of external/CFHead/algorithm/CFHead.py::_build_codebook_and_index
-(seed 99, per-tile randperm init from one shared CPU generator, cdist+argmin+mean,
-kmeans_iters=10 default). Cache format kept compatible: {"metadata", "codebook",
-"index_map"} so the original repo's CFHeadSelector can load our files and vice
-versa (cross-checkability for the head-to-head, docs/26).
-
-Qwen3.5-2B: V=248,320, H=2048, tied embeddings -> lm_head == embed_tokens.weight.
-T=8 -> N=256 tiles. Per-tile k-means is on [V, 8] slices: cheap on GPU.
-
-Run from repo root:
-  python -m tools.build_cfhead_cache --model-dir <model> --out-dir <dir> --clusters 64 4
+"""Build compatible baseline caches using the separately installed CFHead implementation.
+Set CFHEAD_REPO to the official upstream checkout.
 """
 
 from __future__ import annotations
@@ -66,36 +55,17 @@ def fingerprint_weight(weight: torch.Tensor, samples: int = 4096) -> str:
 @torch.no_grad()
 def build_one(weight: torch.Tensor, tile: int, clusters: int, iters: int, seed: int,
               device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    V, H = weight.shape
-    assert H % tile == 0
-    N = H // tile
-    codebook = torch.empty((N, clusters, tile), device=device, dtype=torch.float32)
-    index_map = torch.empty((V, N), device=device, dtype=torch.uint8)
-    generator = torch.Generator(device="cpu")
-    generator.manual_seed(seed)
+    from types import SimpleNamespace
+    from eval.cfhead_kernels import load_upstream
+    upstream = load_upstream("algorithm/CFHead.py", "_mob_cfhead_algorithm")
     w = weight.to(device=device, dtype=torch.float32)
-    for tile_id in range(N):
-        x = w[:, tile_id * tile:(tile_id + 1) * tile].contiguous()  # [V, tile]
-        init_idx = torch.randperm(V, generator=generator)[:clusters].to(device)
-        centroids = x.index_select(0, init_idx).contiguous()
-        assign = None
-        for _ in range(iters):
-            dist = torch.cdist(x, centroids, p=2)
-            assign = torch.argmin(dist, dim=1)
-            new_centroids = torch.zeros_like(centroids)
-            counts = torch.bincount(assign, minlength=clusters).float()
-            new_centroids.index_add_(0, assign, x)
-            nonempty = counts > 0
-            new_centroids[nonempty] /= counts[nonempty].unsqueeze(1)
-            new_centroids[~nonempty] = centroids[~nonempty]
-            centroids = new_centroids.contiguous()
-        if assign is None:
-            assign = torch.argmin(torch.cdist(x, centroids, p=2), dim=1)
-        codebook[tile_id] = centroids
-        index_map[:, tile_id] = assign.to(torch.uint8)
-        if (tile_id + 1) % max(1, N // 8) == 0 or tile_id == N - 1:
-            print(f"  tile {tile_id + 1}/{N}", flush=True)
-    return codebook, index_map
+    context = SimpleNamespace(vocab_size=w.shape[0], hidden_size=w.shape[1],
+                              tile_size=tile, cluster_size=clusters,
+                              num_tiles=w.shape[1] // tile, seed=seed,
+                              kmeans_iters=iters, _weight=lambda: w)
+    if w.shape[1] % tile:
+        raise ValueError("Hidden dimension must be divisible by tile width")
+    return upstream.CFHeadSelector._build_codebook_and_index(context)
 
 
 def main() -> None:

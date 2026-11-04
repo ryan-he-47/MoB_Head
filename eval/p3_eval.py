@@ -1,7 +1,7 @@
 # P3 acceptance eval: normalized PPL of the MoB head vs the native head (same
 # frozen backbone, same dev positions) + decode agreement + generation samples.
-# Spec: docs/03-experiment-plan.md section 7 (user-confirmed acceptance).
-# Usage: python scripts/p3_eval.py --head runs/p2_10m/head_final.pt --outdir runs/p3_eval
+# Spec: docs/01-method.md (architecture study).
+# Usage: python -m eval.p3_eval --head runs/p2_10m/head_final.pt --outdir runs/p3_eval
 import argparse
 import glob
 import json
@@ -34,7 +34,7 @@ def load_tokens(tok, data_glob, cache_path, eos_id):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--model-dir", default=None)
     ap.add_argument("--head", required=True)
     ap.add_argument("--outdir", default="runs/p3_eval")
@@ -62,7 +62,7 @@ def main():
                     help="greedy decode path for generation samples: round = pick-component+round "
                          "(default, comparable with earlier runs); mixture = mixture-argmax over all "
                          "valid vertices; rerank = mixture top-32 proposal + exact native-logit "
-                         "rescoring (cascade, mainline-adopted 2026-09-02, docs/09 section 6.1). "
+                         "rescoring (cascade; see docs/01-method.md). "
                          "The agreement metric always uses round; mixture-argmax agreement is "
                          "recall@1 in eval_topk_recall.py")
     args = ap.parse_args()

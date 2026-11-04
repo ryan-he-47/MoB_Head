@@ -1,0 +1,47 @@
+[
+  {
+    "name": "mob-qwen3.5-2b-swiglu",
+    "num_parameters": 49838464,
+    "sha256": {
+      "model.safetensors": "0e33e3fe6af5eb377601c1fda942c5447b1b83d2eb0128d90f906364059d007a",
+      "codebook.npz": "5ff25eea96fa1bf4aa1d4690e5faf2ed8cb331b26bfa5d74e79c3c1fe158d8de"
+    },
+    "bytes": 200795047
+  },
+  {
+    "name": "mob-smollm2-1.7b-swiglu",
+    "num_parameters": 49313920,
+    "sha256": {
+      "model.safetensors": "5cc11cd3e3379a24d86b15b5b2f9a5a4634c968988e2d917e1339da3ba295187",
+      "codebook.npz": "15766bff14082536a3f61e09ed8bd357404f482383a8e101abd9aed41cd43fd6"
+    },
+    "bytes": 197535435
+  },
+  {
+    "name": "mob-smollm2-1.7b-resmlp",
+    "num_parameters": 50757760,
+    "sha256": {
+      "model.safetensors": "b0b29246c5571de7cdbd1ec242c0953b0294f98314102f93030227c1b9513b72",
+      "codebook.npz": "15766bff14082536a3f61e09ed8bd357404f482383a8e101abd9aed41cd43fd6"
+    },
+    "bytes": 203311363
+  },
+  {
+    "name": "mob-smollm2-1.7b-mlp",
+    "num_parameters": 31861888,
+    "sha256": {
+      "model.safetensors": "a199a0535e29e382610795fceef977a3c5df5868d2f8a50ea8c1a340431a3dea",
+      "codebook.npz": "15766bff14082536a3f61e09ed8bd357404f482383a8e101abd9aed41cd43fd6"
+    },
+    "bytes": 127727067
+  },
+  {
+    "name": "Llama-MoB-3.2-1B-MLP",
+    "num_parameters": 32255232,
+    "sha256": {
+      "model.safetensors": "dda30d5fcc7f9dec0032b105e46dc8b261ec4cb100b7d89ff497e1c9c3eedc35",
+      "codebook.npz": "8398a0462361f4b564015adb16637783ea1f67850c943e95a87e448409ecd842"
+    },
+    "bytes": 129742116
+  }
+]

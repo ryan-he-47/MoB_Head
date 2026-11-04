@@ -25,9 +25,9 @@ PROMPTS = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt")
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\showcase_samples.txt")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--head", default=r".\runs\p2_local_10m_e3\head_final.pt")
+    ap.add_argument("--out", default=r".\runs\showcase_samples.txt")
     ap.add_argument("--tokens", type=int, default=60)
     ap.add_argument("--k", type=int, default=32, help="mixture components (must match checkpoint)")
     ap.add_argument("--width", type=int, default=2458, help="head MLP width (must match checkpoint)")

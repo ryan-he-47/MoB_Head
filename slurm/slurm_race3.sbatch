@@ -6,17 +6,17 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-12:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/race3_%j.out
+#SBATCH --output=logs/slurm_race3_%j.out
 
-# Three-head race on SmolLM2-1.7B (docs/16 §5, user design 2026-09-07; cosine
-# per user ruling 2026-09-09: fixed budget -> full-length decay tail, peak at
+# Three-head race on SmolLM2-1.7B (docs/01-method.md; cosine
+# per
 # the top of each architecture's comfort band from the local LR scan).
 # 312.5M-token cache, batch 8 x 512 -> ~76.1k steps/epoch, 3 epochs = ~228k
 # steps (~93% of the Llama-line 245k budget; data repetition is shared across
 # arms, so no internal confound). Est. ~0.7s/step -> ~45h + 3 chained evals.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train_dual \

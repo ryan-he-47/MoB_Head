@@ -1,5 +1,5 @@
 # Equivalence proof-by-numbers for the kmeans_vertex_init sampler rewrite
-# (user challenge 2026-09-15): old = sample (position,k) PAIRS ~ w, then take
+
 # the pair's token; new = aggregate weights per token (scatter_add over V) and
 # sample tokens directly. Verify: (a) induced token distributions are EXACTLY
 # equal (algebraic identity, checked numerically); (b) empirical sample

@@ -1,20 +1,21 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=mob_fwe_wsd
 #SBATCH --partition=gpu_v100s
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/train_wsd_%j.out
+#SBATCH --output=logs/slurm_train_fwe_wsd_%j.out
 
-# Schedule-variant run (user decision 2026-09-01, parallel to job 519759):
+# Schedule-variant run (parallel to job 519759):
 # peak LR 2e-3 -> 7e-4, warmup 200 -> 2500 (1% of 245k), cosine -> WSD
 # (stable at peak, linear decay over last 35% of steps).
 # Same data/head as the long run: FineWeb-Edu 1B-token cache x 1 epoch,
 # K=128 / width 3072, fp16 backbone, head_latest.pt every 20k steps.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train \

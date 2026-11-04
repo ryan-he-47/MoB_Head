@@ -1,0 +1,57 @@
+[
+  {
+    "name": "mob-qwen3.5-2b-swiglu",
+    "checkpoint": "runs/qwen35_head_latest.pt",
+    "codebook": "data/codebook_qwen35.npz",
+    "base_model": "Qwen/Qwen3.5-2B",
+    "head_type": "swiglu",
+    "head_kwargs": {"h": 2048, "k": 128, "m": 18, "hidden": 7300, "blocks": 1},
+    "license": "mit",
+    "training": {"updates": 224000, "scheduled_updates": 244000, "batch": 16, "sequence_length": 512, "teacher_topk": 1024, "data": "50% FineWeb-Edu, 30% CCI3-HQ, 15% The Stack v3, 5% SmolTalk", "schedule": "cosine", "peak_lr": 0.001, "warmup": 4000},
+    "metrics": {"normalized_ppl_ratio": {"en": 2.17, "zh": 3.66, "code": 2.30, "instruct": 1.47}, "mixture_recall_at_32": {"en": 0.9667, "zh": 0.9420, "code": 0.9503, "instruct": 0.9845}}
+  },
+  {
+    "name": "mob-smollm2-1.7b-swiglu",
+    "checkpoint": "runs/race3_head_swiglu_final.pt",
+    "codebook": "data/codebook_smollm2.npz",
+    "base_model": "HuggingFaceTB/SmolLM2-1.7B",
+    "head_type": "swiglu",
+    "head_kwargs": {"h": 2048, "k": 128, "m": 16, "hidden": 7300, "blocks": 1},
+    "license": "mit",
+    "training": {"updates": 228000, "batch": 8, "sequence_length": 512, "teacher_topk": 1024, "data": "FineWeb-Edu", "schedule": "cosine", "peak_lr": 0.0007, "warmup": 4000},
+    "metrics": {"normalized_ppl_ratio": 1.78, "mixture_recall_at_32": 0.97760009765625, "cascade_agreement_at_32": 0.96490478515625, "native_mass_at_32": 0.8564231395721436}
+  },
+  {
+    "name": "mob-smollm2-1.7b-resmlp",
+    "checkpoint": "runs/race3_head_resmlp_final.pt",
+    "codebook": "data/codebook_smollm2.npz",
+    "base_model": "HuggingFaceTB/SmolLM2-1.7B",
+    "head_type": "resmlp",
+    "head_kwargs": {"h": 2048, "k": 128, "m": 16, "width": 3072, "depth": 5},
+    "license": "mit",
+    "training": {"updates": 228000, "batch": 8, "sequence_length": 512, "teacher_topk": 1024, "data": "FineWeb-Edu", "schedule": "cosine", "peak_lr": 0.001, "warmup": 4000},
+    "metrics": {"normalized_ppl_ratio": 1.90}
+  },
+  {
+    "name": "mob-smollm2-1.7b-mlp",
+    "checkpoint": "runs/race3_head_control_final.pt",
+    "codebook": "data/codebook_smollm2.npz",
+    "base_model": "HuggingFaceTB/SmolLM2-1.7B",
+    "head_type": "mob",
+    "head_kwargs": {"h": 2048, "k": 128, "m": 16, "width": 3072, "depth": 3},
+    "license": "mit",
+    "training": {"updates": 228000, "batch": 8, "sequence_length": 512, "teacher_topk": 1024, "data": "FineWeb-Edu", "schedule": "cosine", "peak_lr": 0.0015, "warmup": 4000},
+    "metrics": {"normalized_ppl_ratio": 2.41}
+  },
+  {
+    "name": "Llama-MoB-3.2-1B-MLP",
+    "checkpoint": "runs/head_final_cont.pt",
+    "codebook": "data/codebook.npz",
+    "base_model": "meta-llama/Llama-3.2-1B",
+    "head_type": "mob",
+    "head_kwargs": {"h": 2048, "k": 128, "m": 17, "width": 3072, "depth": 3},
+    "license": "llama3.2",
+    "training": {"data": "FineWeb-Edu", "teacher_topk": 1024, "sequence_length": 512, "initial_schedule": "WSD", "initial_peak_lr": 0.0007, "polish_updates": 50000, "polish_peak_lr": 0.0002},
+    "metrics": {"normalized_ppl_ratio": 2.00, "round_agreement": 0.774}
+  }
+]

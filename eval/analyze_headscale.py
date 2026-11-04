@@ -3,7 +3,7 @@
 import json
 import sys
 
-RUNS = r"E:\Trash_things\llm_codec\runs"
+RUNS = r".\runs"
 
 
 def load_panels(path, kind):

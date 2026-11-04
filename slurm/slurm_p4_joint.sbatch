@@ -1,23 +1,24 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=mob_p4_joint
 #SBATCH --partition=gpu_v100s
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=1-12:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/p4_joint_%j.out
+#SBATCH --output=logs/slurm_p4_joint_%j.out
 
-# P4 joint fine-tune (user decision 2026-09-03, docs/14): LoRA r32 last-8
+# P4 joint fine-tune (docs/01-method.md): LoRA r32 last-8
 # layers + final norm + MoB head, PURE MoB-NLL loss (no teacher) — MoB head is
 # the system's only output head. Panel: MoB dev NLL (acceptance vs pure-native
 # baseline), native drift NLL (diagnostic), BabyLM OOD MoB NLL (canary).
-# v2 (user course-correction 2026-09-03): NLL jitter too aggressive — warmup
+
 # 500->2000, LR down ~0.7 order (backbone 2e-5->5e-6, head 1e-4->2e-5);
 # priority is a clean declining curve, slow is fine. Old run's log kept in
 # runs/p4_joint/ for comparison.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p4_joint_train \

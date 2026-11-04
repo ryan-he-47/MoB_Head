@@ -3,8 +3,8 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
-DATA_FILE = r"E:\Trash_things\llm_codec\data\babylm_data\babylm_10M\aochildes.train"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
+DATA_FILE = r".\data\babylm_data\babylm_10M\aochildes.train"
 
 def main():
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)

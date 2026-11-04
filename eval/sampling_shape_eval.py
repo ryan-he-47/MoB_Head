@@ -1,5 +1,5 @@
 """Sampling-shape eval: how much of the native top-k distribution does each
-candidate set capture? (user question 2026-09-19)
+candidate set capture?
 
 Theory (truncate+renormalize sampling): within the candidate set C the
 renormalized distribution p' = p/mass(C) preserves ALL pairwise odds exactly;

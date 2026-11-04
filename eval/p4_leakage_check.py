@@ -1,4 +1,4 @@
-# Leakage check for the P4 joint run (docs/14): training minimizes the
+# Leakage check for the P4 joint run (docs/01-method.md): training minimizes the
 # UNrenormalized -log p_mix(code), but acceptance uses the logZ-renormalized
 # NLL. If joint training leaks probability mass onto the 2816 unused vertices,
 # the acceptance metric stalls while train NLL keeps dropping. logZ per
@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM
 
 from mob.mob_common import H, M, MoBHead, mob_mix_logprob
 
-ROOT = r"E:\Trash_things\llm_codec"
+ROOT = r"."
 
 
 def main():

@@ -1,0 +1,42 @@
+{
+  "n_positions": 16384,
+  "topk_recall_vs_ground_truth": {
+    "top-1": 0.4599609375,
+    "top-8": 0.73468017578125,
+    "top-32": 0.8250732421875
+  },
+  "topk_recall_vs_native_top1": {
+    "top-1": 0.77935791015625,
+    "top-8": 0.9185791015625,
+    "top-32": 0.9449462890625
+  },
+  "coverage_native_top8_by_mob_top32": 0.8357620239257812,
+  "coverage_native_top8_mean_count_of_8": 6.68609619140625,
+  "coverage_native_top8_mass_by_mob_top32": 0.9241496324539185,
+  "hitrate_mob_top32_catches_native": {
+    "top8": 0.99761962890625,
+    "top4": 0.99407958984375
+  },
+  "top1_miss_analysis": {
+    "n_miss": 902,
+    "hit_native_top8_on_miss": 0.9567627310752869,
+    "hit_native_top4_on_miss": 0.8924611806869507
+  },
+  "rerank_top1_agreement_vs_native": 0.93194580078125,
+  "cascade32_native_mass_captured": 0.8207982778549194,
+  "round_proposal_32comp": {
+    "recall_vs_native_top1": 0.92950439453125,
+    "hit_native_top8": 0.9967041015625,
+    "hit_native_top4": 0.99163818359375,
+    "rerank_agreement": 0.91778564453125
+  },
+  "mob_head": {
+    "nll": 3.1064250469207764,
+    "ppl": 22.34103332216607
+  },
+  "native_head": {
+    "nll": 2.21927809715271,
+    "ppl": 9.200686466108344
+  },
+  "ppl_ratio_mob_over_native": 2.428192005505406
+}

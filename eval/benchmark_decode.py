@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from mob.mob_common import H, M, MoBHead, decode_greedy, decode_mixture_argmax, decode_rerank_native
 
 V = 128256
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
 PROMPT = "The little boy was playing with"
 
 
@@ -50,7 +50,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(MODEL_DIR)
     model = AutoModelForCausalLM.from_pretrained(MODEL_DIR, dtype=torch.bfloat16).cuda().eval()
 
-    cb = np.load(r"E:\Trash_things\llm_codec\data\codebook.npz")
+    cb = np.load(r".\data\codebook.npz")
     codes_all = torch.from_numpy(cb["codes"].astype(np.float32)).cuda()
     vid_to_tok = torch.full((1 << M,), -1, dtype=torch.long, device="cuda")
     vid_to_tok[torch.from_numpy(cb["vertex_id"]).long().cuda()] = \
@@ -58,8 +58,8 @@ def main():
 
     heads = {}
     for tag, path, k, w in [
-        ("MoB-K32", r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
-        ("MoB-K128", r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt", 128, 3072),
+        ("MoB-K32", r".\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
+        ("MoB-K128", r".\runs\head_latest_wsd.pt", 128, 3072),
     ]:
         head = MoBHead(k=k, width=w).cuda()
         head.load_state_dict(torch.load(path))
@@ -113,11 +113,11 @@ def main():
     h_cpu = torch.randn(1, H)
     head32_cpu = MoBHead(k=32, width=2458)
     head32_cpu.load_state_dict(torch.load(
-        r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt"))
+        r".\runs\p2_local_10m_e3\head_final.pt"))
     head32_cpu.eval()
     head128_cpu = MoBHead(k=128, width=3072)
     head128_cpu.load_state_dict(torch.load(
-        r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt"))
+        r".\runs\head_latest_wsd.pt"))
     head128_cpu.eval()
     vid_cpu = vid_to_tok.cpu()
     codes_cpu = codes_all.cpu()
@@ -241,8 +241,8 @@ def main():
         codes_cpu = codes_all.cpu()
         heads_cpu = {}
         for tag, path, k, w in [
-            ("MoB-K32", r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
-            ("MoB-K128", r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt", 128, 3072),
+            ("MoB-K32", r".\runs\p2_local_10m_e3\head_final.pt", 32, 2458),
+            ("MoB-K128", r".\runs\head_latest_wsd.pt", 128, 3072),
         ]:
             hd = MoBHead(k=k, width=w)
             hd.load_state_dict(torch.load(path, map_location="cpu"))

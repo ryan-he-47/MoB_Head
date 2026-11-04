@@ -1,4 +1,4 @@
-"""Teacher-forced paired fidelity eval: CFHead vs MoB on held-out dev (docs/26 §2).
+"""Teacher-forced paired fidelity eval: CFHead vs MoB on held-out dev (docs/01-method.md).
 
 The missing-metric harness the CFHead paper never reports: same positions, same
 frozen backbone, all arms measured against the native head's own outputs.

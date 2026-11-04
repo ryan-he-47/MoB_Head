@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+message: "Please cite this software when using the MoB_Head implementation or artifacts."
+title: "MoB_Head: Compact Language-Model Output Heads over Semantic Binary Codes"
+type: software
+authors:
+  - name: "MoB_Head contributors"
+repository-code: "https://github.com/ryan-he-47/MoB_Head"
+license: MIT

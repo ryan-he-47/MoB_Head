@@ -1,4 +1,4 @@
-# Semantic eval for a MoB head on FineWeb-Edu dev (user request 2026-09-02):
+
 #   - top-k recall (k=1,8,32) of the MoB mixture distribution, vs (a) the
 #     ground-truth next token and (b) the native head's top-1 prediction
 #   - normalized PPL (same math as p3_eval.py) side by side with native
@@ -17,8 +17,8 @@ from mob.mob_common import H, M, MoBHead, ResMLPHead, SwiGLUHead
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_latest_wsd.pt")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--head", default=r".\runs\head_latest_wsd.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
     ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--pos-chunk", type=int, default=16,
                     help="positions per sub-chunk for the [pos,V,K] pass (K=128: 16 ~= 1GB)")
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\wsd_semantic_eval.json")
+    ap.add_argument("--out", default=r".\runs\wsd_semantic_eval.json")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -114,7 +114,7 @@ def main():
                 cl = logits_flat[s:s + args.pos_chunk].gather(1, cand32)         # [pc,32]
                 mass32.append((torch.logsumexp(cl, -1)
                                - torch.logsumexp(logits_flat[s:s + args.pos_chunk], -1)).exp().cpu())
-                # round-proposal set (user question): top-32 components by pi, rounded
+
                 # per-bit — zero GEMM. Good enough as the cascade proposal?
                 bl_c = bl[s:s + args.pos_chunk]
                 ktop = log_pi[s:s + args.pos_chunk].topk(32, -1).indices         # [pc,32]

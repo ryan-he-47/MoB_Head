@@ -6,15 +6,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/shallow_dual_%j.out
+#SBATCH --output=logs/slurm_p2_shallow_dual_%j.out
 
-# 'Is shallower actually better — even linear?' probe (user question 2026-09-06,
-# docs/16 Q2): single-hidden-layer (width 1024, depth 1) vs BARE LINEAR head,
+
+# docs/01-method.md): single-hidden-layer (width 1024, depth 1) vs BARE LINEAR head,
 # same distillation recipe/data as the scale dual — paired batches, same
 # backbone, identical comparison ruler (original WSD run).
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train_dual \

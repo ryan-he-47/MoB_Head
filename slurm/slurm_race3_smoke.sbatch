@@ -6,14 +6,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=0-01:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/race3_smoke_%j.out
+#SBATCH --output=logs/slurm_race3_smoke_%j.out
 
 # Race3 pre-flight smoke: 8-step training (arm construction, kmeans init,
 # per-arm cosine peaks) + all three chained evals on 2 chunks each (exercises
 # the new p3_eval --head-type paths). ~15-20 min total. Green -> submit race3.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train_dual \

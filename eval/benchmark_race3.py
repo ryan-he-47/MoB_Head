@@ -1,4 +1,4 @@
-# Race3 efficiency benchmark (user request 2026-09-13): comprehensive re-test
+
 # of the three race heads on SmolLM2-1.7B, RTX 4060 Laptop (8GB).
 #   A. head-only latency: GPU bf16 batch1 / batch256, CPU fp32 batch1 (native
 #      lm_head matvec as reference)
@@ -48,14 +48,14 @@ def build_head(args, tag):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--model-dir", default=r"E:\Trash_things\llm_codec\models\SmolLM2-1.7B")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--model-dir", default=r".\models\SmolLM2-1.7B")
     ap.add_argument("--codebook", default="codebook_smollm2.npz")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--m", type=int, default=16)
     ap.add_argument("--heads", default="control,resmlp,swiglu")
     ap.add_argument("--gen-tokens", type=int, default=64)
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\race3_benchmark.json")
+    ap.add_argument("--out", default=r".\runs\race3_benchmark.json")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     dev = "cuda"

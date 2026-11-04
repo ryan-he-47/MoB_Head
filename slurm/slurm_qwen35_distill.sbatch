@@ -6,27 +6,27 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=3-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/qwen35_distill_%j.out
+#SBATCH --output=logs/slurm_qwen35_distill_%j.out
 
 # Qwen3.5-2B (instruct) distillation — the big-vocab mainline (2026-09-15):
 # swiglu head (race3 winner) K=128, m=18 from codebook, cosine 1e-3 warmup 4000
 # (batch 16 x sqrt2 LR scaling from the race-validated 7e-4@batch8; still inside
-# the measured swiglu comfort band; user decision 2026-09-15: throughput over
+# the measured swiglu comfort band;
 # batch-8 comparability, which multilingual+2B already broke), 1 epoch over the
 # 2B-token mix = ~244k steps (~35h est at ~0.5s/step), peak mem ~14GB.
 # All artifacts in SCRATCH (home quota). Gates: verify job must have produced
 # the codebook + TAP_OK first.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
-SCRATCH=/gpfs1/scratch/yihe47/qwen35
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
+SCRATCH=${MOB_SCRATCH:?set MOB_SCRATCH}
 
 # combined dev cache (4 sources x 2M tokens, concatenated in source order)
 $PY - <<'EOF'
 import numpy as np
-parts = [np.load(f"/gpfs1/scratch/yihe47/qwen35/cache/qwen35_dev_{s}_tokens.npy")
+parts = [np.load(f"${MOB_SCRATCH:?set MOB_SCRATCH}/cache/qwen35_dev_{s}_tokens.npy")
          for s in ("en", "zh", "code", "instruct")]
-np.save("/gpfs1/scratch/yihe47/qwen35/cache/qwen35_dev_mix_tokens.npy",
+np.save("${MOB_SCRATCH:?set MOB_SCRATCH}/cache/qwen35_dev_mix_tokens.npy",
         np.concatenate(parts))
 print("dev_mix:", sum(len(p) for p in parts))
 EOF

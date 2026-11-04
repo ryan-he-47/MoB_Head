@@ -1,7 +1,7 @@
 # Benchmark-task head-to-head: Original vs CFHead (two configs) vs MoB-cascade
-# on Qwen3.5-2B — the "口径 A / benchmark" arm of docs/26-cfhead-headtohead-plan.md §3.
+# on Qwen3.5-2B — the "口径 A / benchmark" arm of docs/01-method.md
 #
-# Protocol ported from the CFHead reproduction (E:\CFHead\CFHead\repro):
+# Protocol ported from the CFHead reproduction (the official CFHead evaluation):
 #   * seed-99 shuffle -> fixed sample counts (accuracy_compare.py, mmlu_topk_sweep.py)
 #   * 5-shot chat prompts via tokenizer.apply_chat_template (instruct model)
 #   * greedy decoding with HF KV-cache incremental decoding, EOS early stop
@@ -28,6 +28,8 @@
 #      instruct emits <|im_end|>); finished steps are filled with
 #      tokenizer.eos_token_id exactly like the repro's masked_fill.
 from __future__ import annotations
+
+import os
 
 import argparse
 import csv
@@ -570,13 +572,13 @@ def write_summary(out_dir: Path, rows: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser(description="Original vs CFHead vs MoB-cascade benchmark comparison (Qwen3.5-2B)")
-    p.add_argument("--model-dir", default="/gpfs1/scratch/yihe47/qwen35/models/Qwen3.5-2B")
-    p.add_argument("--bench-root", default="/gpfs1/scratch/yihe47/qwen35/bench_data")
+    p.add_argument("--model-dir", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "models/Qwen3.5-2B"))
+    p.add_argument("--bench-root", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "bench_data"))
     p.add_argument("--mgsm-demo-file", default="mgsm_train_en.parquet")
-    p.add_argument("--cfhead-cache-dir", default="/gpfs1/scratch/yihe47/qwen35/cfhead_cache")
-    p.add_argument("--mob-head", default="/gpfs1/scratch/yihe47/qwen35/runs/p9_qwen35_swiglu/head_latest.pt")
-    p.add_argument("--codebook", default="/gpfs1/scratch/yihe47/qwen35/data/codebook_qwen35.npz")
-    p.add_argument("--out", default="/gpfs1/scratch/yihe47/qwen35/runs/cfhead_benchmarks")
+    p.add_argument("--cfhead-cache-dir", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "cfhead_cache"))
+    p.add_argument("--mob-head", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "runs/p9_qwen35_swiglu/head_latest.pt"))
+    p.add_argument("--codebook", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "data/codebook_qwen35.npz"))
+    p.add_argument("--out", default=os.path.join(os.environ.get("MOB_SCRATCH", "."), "runs/cfhead_benchmarks"))
     p.add_argument("--tasks", default=",".join(TASKS))
     p.add_argument("--arms", default=",".join(ARMS),
                    help="Comma subset of original,cfhead_q,cfhead_m,mob_cascade. "

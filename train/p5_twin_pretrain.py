@@ -1,10 +1,10 @@
-# P5 / Rung-3 (docs/15, user-approved 2026-09-05): from-scratch twin pretrain —
+# P5 / Rung-3 (docs/01-method.md): from-scratch twin pretrain —
 # the decisive structural test for the MoB head. Two identical 212M Llama-mini
 # models (h768/L12/H12, tied embeddings, V=128256) differ ONLY in the output
 # head: native tied lm_head + softmax CE vs MoB head over 17-bit semantic-tree
 # codes (pure MoB-NLL, T=1). Same data order, same seed, full fp32 (no
 # half-precision variables — the hard-bones doctrine: one variable less, one
-# failure mode less). Verdict lines and the failure playbook: docs/15 §1/§6.
+
 import argparse
 import json
 import os
@@ -26,7 +26,7 @@ PROMPTS = ["The little boy was playing with", "My mother said I should"]
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--head-type", choices=["native", "mob"], required=True)
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--token-cache", default="fineweb_train_tokens.npy")
     ap.add_argument("--dev-cache", default="fineweb_dev_tokens.npy")
@@ -90,7 +90,7 @@ def main():
     if head is not None and not args.resume:
         # unigram-weighted k-means vertex init (no teacher exists from scratch):
         # sampling each first-batch target occurrence uniformly == sampling by
-        # empirical frequency (docs/15 section 3)
+        # empirical frequency (docs/01-method.md)
         warm = torch.from_numpy(chunks[: 4 * args.batch, 1:].copy()).reshape(-1).cuda()
         tps = torch.ones(warm.numel(), device="cuda") / warm.numel()
         init_logits = kmeans_vertex_init(codes_all, warm, tps, args.init_c, args.k,
@@ -191,7 +191,7 @@ def main():
         gnorm = torch.nn.utils.clip_grad_norm_(params, 1.0).item()
         opt.step()
         if not torch.isfinite(loss):
-            # NaN rule (docs/15 section 4): rollback once + halve LR; second time stop
+            # NaN rule (docs/01-method.md): rollback once + halve LR; second time stop
             nan_count += 1
             print(f"NaN at step {step} (count {nan_count})", flush=True)
             if nan_count >= 2:

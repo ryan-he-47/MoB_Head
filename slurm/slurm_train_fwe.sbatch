@@ -1,19 +1,20 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=mob_fwe
 #SBATCH --partition=gpu_v100s
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/train_%j.out
+#SBATCH --output=logs/slurm_train_fwe_%j.out
 
 # B+A quick verification run on the cluster: 1024 steps (max-chunks 8192),
 # K=128 / width 3072, FineWeb-Edu caches (built by slurm_setup.sbatch).
 # Validates: fp16 backbone on V100, cache paths, train loop, eval chain.
-# For the long run: drop --max-chunks / raise it (scale = user decision).
+# For the long run: drop --max-chunks / raise it (scale =).
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"

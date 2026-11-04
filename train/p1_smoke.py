@@ -2,7 +2,7 @@
 # fixed set of positions, verifying the full distillation pipeline end to end:
 #   frozen backbone -> (h, teacher top-k) -> weighted NLL loss -> metrics,
 #   component-collapse alarms, and greedy decode vs teacher top-1.
-# Spec: docs/03-experiment-plan.md sections 4.2-4.5.
+# Spec: docs/01-method.md
 import glob
 import time
 
@@ -12,15 +12,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
-DATA_DIR = r"E:\Trash_things\llm_codec\data\babylm_data\babylm_10M"
-CODEBOOK = r"E:\Trash_things\llm_codec\data\codebook.npz"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
+DATA_DIR = r".\data\babylm_data\babylm_10M"
+CODEBOOK = r".\data\codebook.npz"
 
 H = 2048          # backbone hidden size
 WIDTH = 2458      # 1.2 * H
 K = 32            # mixture components
 M = 17            # code bits
-TOPK = 1024       # distillation target size (user decision 2026-08-31)
+TOPK = 1024       # distillation target size ()
 N_CHUNKS = 16     # 16 x 512 = 8k positions to overfit
 SEQ_LEN = 512
 BATCH = 4

@@ -1,20 +1,21 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=mob_fwe_cont
 #SBATCH --partition=gpu_v100s
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=0-08:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/train_cont_%j.out
+#SBATCH --output=logs/slurm_train_fwe_cont_%j.out
 
-# Continuation run (user decision 2026-09-03, docs/14): probe the head's
+# Continuation run (docs/01-method.md): probe the head's
 # ceiling with a low-LR polish on top of the WSD final head.
 #   --resume <weights-only> = weights init + fresh optimizer/schedule.
 # peak 2e-4 cosine -> ~0 over 50k steps (--max-chunks 400k, batch 8),
 # same 1B-token cache re-seeded (order reshuffle), DAEM off (T=1).
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p2_train \

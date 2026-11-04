@@ -6,22 +6,22 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=0-04:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/qwen35_verify_%j.out
+#SBATCH --output=logs/slurm_qwen35_verify_%j.out
 
 # Qwen3.5-2B tap-point verification + 18-bit codebook build (GPU).
 # Gates the distillation: if TAP_OK fails, stop and reassess the tap point.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
-MODEL=/gpfs1/scratch/yihe47/qwen35/models/Qwen3.5-2B
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
+MODEL=${MOB_SCRATCH:?set MOB_SCRATCH}/models/Qwen3.5-2B
 
 nvidia-smi
-$PY -u tools/verify_qwen35_tap.py $MODEL
+$PY -u -m tools.verify_qwen35_tap $MODEL
 
-$PY -u tools/build_codebook.py \
+$PY -u -m tools.build_codebook \
   --model-dir $MODEL \
-  --out-npz /gpfs1/scratch/yihe47/qwen35/data/codebook_qwen35.npz \
-  --out-meta /gpfs1/scratch/yihe47/qwen35/data/codebook_qwen35_meta.json \
+  --out-npz ${MOB_SCRATCH:?set MOB_SCRATCH}/data/codebook_qwen35.npz \
+  --out-meta ${MOB_SCRATCH:?set MOB_SCRATCH}/data/codebook_qwen35_meta.json \
   --device cuda
 
 echo QWEN35_VERIFY_DONE

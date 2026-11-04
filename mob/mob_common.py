@@ -1,5 +1,5 @@
 # Shared MoB (Mixture of factorized Bernoullis) head definition + stable loss math.
-# Used by p2_train.py and p3_eval.py. Spec: docs/03-experiment-plan.md sections 4.2-4.3.
+# Used by p2_train.py and p3_eval.py. Spec: docs/01-method.md
 import math
 
 import torch
@@ -40,9 +40,7 @@ class RMSNorm(nn.Module):
 
 
 class ResMLPHead(nn.Module):
-    """Residual MLP head: pre-norm (RMSNorm) Linear-SiLU blocks with residual
-    adds + final norm before readout — the modern gradient-flow upgrade for
-    the deep-head route (docs/16 §5, user route 1). Same forward signature."""
+    """Residual MLP head with RMS pre-normalization and a normalized readout."""
 
     def __init__(self, k=K, width=WIDTH, h=H, depth=5, m=M):
         super().__init__()
@@ -65,12 +63,10 @@ class ResMLPHead(nn.Module):
 
 
 class SwiGLUHead(nn.Module):
-    """SwiGLU head -- the same FFN family as the LLM's own layers
-    (docs/16 §5, user route 2): per block x + W3(SiLU(x_n W1) * (x_n W2))
-    with x_n = RMSNorm(x) -- pre-norm + residual on EVERY block, final norm
-    before readout (fixed 2026-09-09: the original had no norms and no
-    residual on block 0, which made high-LR instability a foregone
-    conclusion and invalidated the first LR scan). Same forward signature."""
+    """SwiGLU head with RMS pre-normalization, residual blocks and final norm.
+
+    Each block computes x + W3(SiLU(x_n W1) * (x_n W2)), x_n = RMSNorm(x).
+    """
 
     def __init__(self, k=K, h=H, hidden=7300, m=M, blocks=1):
         super().__init__()
@@ -97,9 +93,7 @@ class SwiGLUHead(nn.Module):
 
 
 class LinearHead(nn.Module):
-    """Bare linear head: h -> k*m+k logits, no hidden layer (probe arm for the
-    'is shallower actually better?' question, docs/16 Q2). Same forward
-    signature as MoBHead so all decode/loss paths work unchanged."""
+    """Linear diagnostic head with the same output contract as MoBHead."""
 
     def __init__(self, k=K, h=H, m=M):
         super().__init__()
@@ -117,7 +111,7 @@ def propose_roundflip(bit_logits, log_pi, codes_all, vid_to_tok, topn=32,
                       aug_topn=32, alpha=0.15, u_max=6, per_comp_cap=8):
     """round-topn component modes PLUS flip-enumeration hedge on the top
     `aug_topn` components' uncertain bits (|sigmoid(z)-0.5| <= alpha).
-    Validated 2026-09-07 (docs/09 §6.2): with aug_topn=32/per_comp_cap=8
+    Validated 2026-09-07 (docs/01-method.md): with aug_topn=32/per_comp_cap=8
     ("diversity first, hedge second, every component a small budget") it
     beats all measured variants — recall 96.5%, hit@top8 100%, rerank 96.5%
     at mean 81 / p95 122 candidates, NO codebook GEMM. n_batch==1 only.
@@ -154,7 +148,7 @@ def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
                      ratio=0.05, mass=0.95, alpha=0.25, u_max=12, max_cand=512,
                      floor=0):
     """Adaptive candidate generation exploiting the mixture's probabilistic
-    structure (user design 2026-09-07, docs/09 §6.2). n_batch==1 only.
+    structure (docs/01-method.md). n_batch==1 only.
     1. Dynamic component scope: mode="ratio" keeps components with
        pi_k >= pi_max * ratio (sharp -> few, flat -> many); mode="mass" keeps
        the smallest prefix covering `mass` of the pi mass. `floor` forces at
@@ -210,7 +204,7 @@ def propose_adaptive(bit_logits, log_pi, codes_all, vid_to_tok, mode="ratio",
 
 def propose_varflip(bit_logits, log_pi, codes_all, vid_to_tok, alpha=0.15,
                     u_max=12, per_comp_cap=16, max_cand=256):
-    """Variance-ranked full-scope flip proposal (user design 2026-09-19):
+    """Variance-ranked full-scope flip proposal ():
     1) modes of ALL K components, deduped (component modes DO collide —
        converged low-pi clones share vertices; the plain vectorized round-32
        path never deduped, roundflip/adaptive do);
@@ -245,7 +239,7 @@ def propose_varflip(bit_logits, log_pi, codes_all, vid_to_tok, alpha=0.15,
         base_vid = (base * shifts).sum()
         combos = ((torch.arange(2 ** u, device=bit_logits.device).unsqueeze(1)
                    >> torch.arange(u - 1, -1, -1, device=bit_logits.device)) & 1).long()
-        # user refinement (2026-09-19): combo priority = SUM of flipped-bit
+
         # variances, descending. Since var = sigmoid(z)(1-sigmoid(z)) is
         # strictly decreasing in |z|, this IS the per-component exact
         # likelihood order (flip the cheapest bits first), tighter than the
@@ -349,7 +343,7 @@ def mob_mix_logprob(bit_logits, log_pi, codes):
 def decode_greedy(bit_logits, log_pi, vid_to_tok, codes_all, m=M):
     """argmax-pi component + per-bit rounding -> token id. Returns [n] long.
     Falls back to the nearest valid vertex (Hamming) if rounding lands on an
-    unused vertex (spec: docs/03 section 4.5). m = code length in bits."""
+    unused vertex (spec: docs/01-method.md). m = code length in bits."""
     ks = log_pi.argmax(-1)
     bl = bit_logits[torch.arange(ks.numel(), device=bit_logits.device), ks]
     bits = (bl > 0).float()                                    # [n, m]
@@ -401,7 +395,7 @@ def mixture_topk(bit_logits, log_pi, codes_all, topn):
 
 
 def decode_mixture_argmax(bit_logits, log_pi, codes_all):
-    """Mainline decode (docs/11 section 10, user decision 2026-09-02): rank all
+    """Exact mixture decode: rank all
     valid vertices by full mixture probability, take top-1 — no component pick,
     no rounding, no Hamming fallback needed. codes_all is [V,M] in vocab-id
     order, so the argmax index IS the token id. Returns [n] long.
@@ -414,12 +408,12 @@ def decode_mixture_argmax(bit_logits, log_pi, codes_all):
 
 def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
                          proposal="mixture", vid_to_tok=None, adaptive_kwargs=None):
-    """Cascade decode (mainline-adopted 2026-09-02, docs/09 section 6.1): MoB
+    """Cascade decode: MoB
     proposes top-n candidate tokens, then exact native logits h @ E[cand]^T
     rescore them (reads topn x H rows of the tied embedding table, ~131 KB at
     topn=32 — no full-V matmul). proposal="mixture": exact bound-pruned ranking
     (top-1 agreement 92.2%); proposal="round": round the top-n components by pi
-    to their vertices — zero GEMM, ~free (agreement 89.9%, docs/09 section 6.1;
+    to their vertices — zero GEMM, ~free (agreement 89.9%, docs/01-method.md;
     needs vid_to_tok, n==1 only). E [V,H] any dtype, h [n,H]. Returns [n] long."""
     if proposal == "roundflip":
         assert bit_logits.shape[0] == 1 and vid_to_tok is not None
@@ -436,7 +430,7 @@ def decode_rerank_native(bit_logits, log_pi, codes_all, E, h, topn=32,
         scores = h[0].to(E.dtype) @ E[cand].T
         return cand[scores.argmax()].view(1)
     if proposal == "scoreflip":
-        # budget-256-class mainline proposal (2026-09-19, docs/27 §2.4): best
+        # budget-256-class mainline proposal (2026-09-19, docs/01-method.md): best
         # cheap approximation of mixture_topk — self-truncates on peaked
         # positions (~90-105 candidates), 256 on diffuse ones.
         assert bit_logits.shape[0] == 1 and vid_to_tok is not None

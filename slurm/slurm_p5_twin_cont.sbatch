@@ -6,22 +6,22 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/p5_twin_cont_%j.out
+#SBATCH --output=logs/slurm_p5_twin_cont_%j.out
 
-# P5 twin continuation (user direction 2026-09-05): probe the convergence FLOOR
+# P5 twin continuation (architecture study): probe the convergence FLOOR
 # of both heads. Weights-only resume from each twin's 60k latest.pt; fresh
 # optimizer; LR mild restart peak 1e-4 (previous cosine ended at 6e-5) with
 # cosine -> 2% over another 60k steps; data permutation CONTINUES past the
 # consumed prefix (skip 60000*16 chunks; cache capacity covers 120k steps
 # without repeats).
 # Usage: sbatch slurm_p5_twin_cont.sbatch {native|mob}
-# v2 (2026-09-06, user diagnosis): the 1e-4 restart bumped BOTH twins (fresh
+
 # Adam moments + restart above the ending LR); mob is more sensitive (its head
 # sits at a sharper optimum) and crawled back too slowly. Per-head-type peaks:
 # native 1e-4, mob 5e-5 (below the 6e-5 ending LR = no bump).
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 HEAD_TYPE=$1
 
 if [ "$HEAD_TYPE" = "mob" ]; then PEAK=5e-5; else PEAK=1e-4; fi

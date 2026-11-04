@@ -13,9 +13,9 @@ import torch
 from safetensors import safe_open
 
 _ap = argparse.ArgumentParser()
-_ap.add_argument("--model-dir", default=r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master")
-_ap.add_argument("--out-npz", default=r"E:\Trash_things\llm_codec\data\codebook.npz")
-_ap.add_argument("--out-meta", default=r"E:\Trash_things\llm_codec\data\codebook_meta.json")
+_ap.add_argument("--model-dir", default=r".\LLM-Research--Llama-3.2-1B\snapshots\master")
+_ap.add_argument("--out-npz", default=r".\data\codebook.npz")
+_ap.add_argument("--out-meta", default=r".\data\codebook_meta.json")
 _ap.add_argument("--seed", type=int, default=42)
 _ap.add_argument("--device", default="cuda", help="'cuda' or 'cpu' (prep jobs on CPU nodes)")
 _args = _ap.parse_args()

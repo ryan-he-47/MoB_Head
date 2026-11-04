@@ -1,18 +1,19 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=setup_llmcodec
 #SBATCH --partition=tiny
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/setup_%j.out
+#SBATCH --output=logs/slurm_setup_%j.out
 
 # One-shot cluster setup for llm_codec B+A run:
 #   1. install missing packages into cose2 (torch 2.5.1+cu121 already present, V100-safe)
 #   2. download Llama-3.2-1B from ModelScope
 #   3. build FineWeb-Edu token caches (dev 2000 docs + train 1M docs)
 set -euxo pipefail
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
-cd /gpfs1/home/yihe47/llm_codec
+PY=${PYTHON:-python}
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 
 echo "=== sanity ==="
 $PY --version

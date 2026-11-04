@@ -1,4 +1,4 @@
-# Chinese-emergence qualitative probe (user idea 2026-09-13): the best Llama-line
+
 # MoB head (distilled on English-only FineWeb-Edu) meets Chinese prompts.
 # Question: does the head extrapolate to Chinese regions of hidden space (OOD
 # for its training distribution), i.e. does Chinese "emerge"? Three decode
@@ -29,12 +29,12 @@ PROMPTS = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_final_cont.pt")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--head", default=r".\runs\head_final_cont.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
     ap.add_argument("--tokens", type=int, default=40)
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\chinese_qual.txt")
+    ap.add_argument("--out", default=r".\runs\chinese_qual.txt")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 

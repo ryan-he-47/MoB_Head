@@ -1,4 +1,4 @@
-# Encoder-side counterpart experiment (user proposal 2026-09-01):
+
 # MLP from 17-bit code -> word embedding, MSE-supervised, trained to overfit
 # the fixed lookup mapping (128256 input-output pairs). If the plug-in PPL test
 # passes, the embedding table can be replaced entirely.
@@ -12,9 +12,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
-CODEBOOK = r"E:\Trash_things\llm_codec\data\codebook.npz"
-DEV_CACHE = r"E:\Trash_things\llm_codec\data\babylm_dev_tokens.npy"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
+CODEBOOK = r".\data\codebook.npz"
+DEV_CACHE = r".\data\babylm_dev_tokens.npy"
 
 H = 2048
 M_BITS = 17
@@ -42,7 +42,7 @@ def main():
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--batch", type=int, default=16384)
     ap.add_argument("--lr", type=float, default=2e-3)
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\enc_mlp.pt")
+    ap.add_argument("--out", default=r".\runs\enc_mlp.pt")
     ap.add_argument("--skip-plug-in-test", action="store_true")
     args = ap.parse_args()
     torch.manual_seed(42)

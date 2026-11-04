@@ -1,18 +1,19 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=smollm2_prep
 #SBATCH --partition=tiny
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=0-08:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/smollm2_prep_%j.out
+#SBATCH --output=logs/slurm_smollm2_prep_%j.out
 
-# SmolLM2-1.7B prep for the Frankenstein-hypothesis probe (docs/17): download
+# SmolLM2-1.7B prep for the Frankenstein-hypothesis probe (docs/01-method.md): download
 # weights, build the 16-bit semantic-tree codebook on CPU, retokenize
 # FineWeb-Edu with the SmolLM2 tokenizer (300k docs ~= 300M tokens, enough for
 # the 50k-step probe).
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 MDIR=models/SmolLM2-1.7B
 
 $PY - <<'EOF'

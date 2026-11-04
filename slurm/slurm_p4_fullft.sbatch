@@ -1,13 +1,14 @@
 #!/bin/bash
+#SBATCH --exclude=gpu-v100s-06
 #SBATCH --job-name=mob_p4_fullft
 #SBATCH --partition=gpu_v100s
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=/gpfs1/home/yihe47/llm_codec/logs/p4_fullft_%j.out
+#SBATCH --output=logs/slurm_p4_fullft_%j.out
 
-# P4 escalation ladder rung 1 (user direction 2026-09-04, docs/14): LoRA's
+# P4 escalation ladder rung 1 (architecture study.md): LoRA's
 # low-rank assumption does not fit "reshape h for a new output space" — so
 # FULL-PARAMETER unfreeze of the last 4 layers + final norm (~268M trainable),
 # pure MoB-NLL, from the WSD final head. v2: first attempt NaN'd on V100 within
@@ -16,8 +17,8 @@
 # Fix = the proven pre-Ampere stack: fp16 trunk + fp32 trainable layers +
 # autocast fp16 + GradScaler; LRs halved (bb 1e-5 / head 5e-6), warmup 1000.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
 
 nvidia-smi
 $PY -m train.p4_joint_train \

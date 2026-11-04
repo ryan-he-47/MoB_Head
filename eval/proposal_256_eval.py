@@ -1,4 +1,4 @@
-"""Budget-256 proposal shootout (2026-09-19, docs/27 follow-up).
+"""Budget-256 proposal shootout (2026-09-19, docs/01-method.md follow-up).
 
 Question: with the candidate budget unlocked to ~256 (CFHead-T4's operating
 point), how close do cheap MoB proposals get to the exact mixture_topk@256
@@ -8,7 +8,7 @@ Arms per position (all n_batch==1):
   mixture256   exact bound-pruned top-256 by mixture probability (GEMM ceiling)
   adaptive256  propose_adaptive(max_cand=256, floor=32)  — adopted adaptive
   varflip256   propose_varflip: all-K modes dedup + variance-ordered flips,
-               per-comp cap 16 (user design; combos ordered by descending
+               per-comp cap 16 (; combos ordered by descending
                flipped-bit variance = per-component exact likelihood order)
   scoreflip256 propose_scoreflip: pi-mass scope + liberal flip emission +
                EXACT mixture rescoring + score-truncation (no ranking GEMM)

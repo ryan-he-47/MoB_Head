@@ -6,24 +6,24 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --output=/gpfs1/scratch/yihe47/qwen35/logs/cfhead_longform_%j.out
+#SBATCH --output=logs/slurm_cfhead_longform_%j.out
 
-# J4 of docs/26-cfhead-headtohead-plan.md section 3 (protocol A): long-form
+# J4 of docs/01-method.md (protocol A): long-form
 # autoregressive head-to-head on Qwen3.5-2B — native / CFHead-Q(k=256) /
 # CFHead-M(k=8192) / MoB cascade (roundflip + embedding-row rerank).
 # 6 prompts (ShareGPT 2 + LMSYS 2 + LongBench hotpotqa/samsum) x 8192 greedy
 # steps, EOS disabled, batch 1, KV cache; per-step fp32 native shadow scoring
 # (hit = containment, agreement = token match) with repeat/novel bucketing
-# (docs/25 appendix C anti-confound). All four arms run sequentially in this
+# (docs/01-method.md). All four arms run sequentially in this
 # one job.
 # Gates: the J1 cache-build job must have produced both CFHead caches under
 # $SCRATCH/cfhead_cache, the bench_data exports must be uploaded, and the p9
 # swiglu head_latest.pt must exist.
 
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
-SCRATCH=/gpfs1/scratch/yihe47/qwen35
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
+SCRATCH=${MOB_SCRATCH:?set MOB_SCRATCH}
 mkdir -p $SCRATCH/logs $SCRATCH/runs/cfhead_longform
 
 nvidia-smi

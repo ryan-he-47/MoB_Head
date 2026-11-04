@@ -6,9 +6,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --output=/gpfs1/scratch/yihe47/qwen35/logs/cfhead_benchmarks_%j.out
+#SBATCH --output=logs/slurm_cfhead_benchmarks_%j.out
 
-# CFHead head-to-head, benchmark arm (docs/26-cfhead-headtohead-plan.md section 3,
+# CFHead head-to-head, benchmark arm (docs/01-method.md,
 # job J3): Original vs CFHead-Q (C=64, k=256) vs CFHead-M (C=4, k=8192) vs
 # MoB-cascade (SwiGLU K=128 roundflip+rerank) on MGSM en/zh, MMLU, GSM8K, ARC-C.
 # All four tasks x four arms run sequentially inside ONE python invocation
@@ -16,9 +16,9 @@
 # produced cfhead_v3_*_T8_C{64,4}_*.pt in $SCRATCH/cfhead_cache, bench_data must
 # be uploaded to $SCRATCH/bench_data, and the p9 distill head_latest.pt must exist.
 set -euxo pipefail
-cd /gpfs1/home/yihe47/llm_codec
-PY=/home/yihe47/miniconda3/envs/cose2/bin/python
-SCRATCH=/gpfs1/scratch/yihe47/qwen35
+cd "${MOB_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+PY=${PYTHON:-python}
+SCRATCH=${MOB_SCRATCH:?set MOB_SCRATCH}
 
 nvidia-smi
 $PY -u -m eval.cfhead_benchmarks \

@@ -1,6 +1,6 @@
 # Gap analysis: decompose the MoB-vs-native PPL gap by (a) teacher entropy
 # quartile and (b) the rank of the true next token in the teacher distribution.
-# Informs the next-direction decision (docs/07-p2-report.md section 6, option C).
+
 import argparse
 import glob
 import json
@@ -32,10 +32,10 @@ def load_tokens(tok, data_glob, cache_path, eos_id):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--model-dir", default=None)
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\p2_local_10m_e3\head_final.pt")
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\gap_analysis.json")
+    ap.add_argument("--head", default=r".\runs\p2_local_10m_e3\head_final.pt")
+    ap.add_argument("--out", default=r".\runs\gap_analysis.json")
     ap.add_argument("--seq-len", type=int, default=512)
     ap.add_argument("--n-chunks", type=int, default=32)
     ap.add_argument("--batch", type=int, default=4)

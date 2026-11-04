@@ -1,8 +1,8 @@
-# P4 joint fine-tune (docs/14, user decision 2026-09-03): LoRA on the backbone
+# P4 joint fine-tune (docs/01-method.md): LoRA on the backbone
 # (r=32, last 8 layers) + final norm trainable + MoB head, trained with the
 # PURE MoB-NLL loss (no teacher) — the MoB head is the system's ONLY output
 # head and the native lm_head never enters forward or loss.
-# Acceptance framing (user-reframed 2026-09-03): MoB-system dev PPL vs the
+# Acceptance framing (): MoB-system dev PPL vs the
 # pure-native baseline; native-drift PPL is DIAGNOSTIC ONLY; OOD (BabyLM) MoB
 # PPL is the catastrophic-forgetting canary.
 # Mixed-precision recipe validated in the local probe: bf16 frozen trunk +
@@ -26,7 +26,7 @@ PROMPTS = ["The little boy was playing with", "My mother said I should"]
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--model-dir", default=None)
     ap.add_argument("--outdir", default="runs/p4_joint")
     ap.add_argument("--token-cache", default="fineweb_train_tokens.npy")
@@ -53,13 +53,13 @@ def main():
                     help="cosine decays both LR groups to ~5%% after warmup (polish runs)")
     ap.add_argument("--mode", choices=["lora", "unfreeze"], default="lora",
                     help="lora = peft adapter; unfreeze = full-parameter last N layers + norm "
-                         "(escalation ladder rung 1, docs/14: LoRA's low-rank assumption does "
+                         "(escalation ladder rung 1, docs/01-method.md: LoRA's low-rank assumption does "
                          "not fit reshape-h-geometry tasks)")
     ap.add_argument("--n-layers", type=int, default=4, help="unfreeze mode: last N layers")
     ap.add_argument("--compute-dtype", choices=["bfloat16", "float16"], default="bfloat16",
                     help="trunk/autocast dtype. V100 (pre-Ampere): use float16 + GradScaler — "
                          "bf16 there runs through emulation paths that NaN'd full-parameter "
-                         "training within 400 warmup steps (job 524864, docs/14)")
+                         "training within 400 warmup steps (job 524864, docs/01-method.md)")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     os.makedirs(args.outdir, exist_ok=True)

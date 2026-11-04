@@ -1,4 +1,4 @@
-# Shallow-probe curve morphology analysis (user question 2026-09-09):
+
 # (a) did shallow1l converge? (b) did it show a second-stage climb in the WSD
 # decay tail like deep5 did? Compare shapes vs control WSD and deep5/wide arms.
 # CPU only. WSD decay-frac 0.35 over 245k -> decay onset ~159k.

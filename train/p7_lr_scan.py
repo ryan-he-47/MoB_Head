@@ -1,4 +1,4 @@
-# P7 local LR-comfort scan for the three-head race (docs/16 §5, user direction
+# P7 local LR-comfort scan for the three-head race (docs/01-method.md, architecture study
 # 2026-09-07): find each head variant's comfortable LR peak LOCALLY (Llama
 # backbone, h=2048 — same hidden size as the SmolLM2 race backbone; LR comfort
 # is architecture-driven, transfers across backbones of equal h).
@@ -31,8 +31,8 @@ PEAKS = [3e-4, 7e-4, 1.5e-3, 3e-3]
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--outdir", default=r"E:\Trash_things\llm_codec\runs\lr_scan")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--outdir", default=r".\runs\lr_scan")
     ap.add_argument("--steps", type=int, default=2500)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--seq-len", type=int, default=512)

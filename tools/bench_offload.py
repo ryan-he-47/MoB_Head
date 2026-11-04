@@ -1,4 +1,4 @@
-"""CPU-offload latency benchmark (user protocol 2026-09-19).
+"""CPU-offload latency benchmark.
 
 Split: GPU runs the coarse stage; the small coarse outputs cross PCIe; CPU
 runs the cheap proposal + gather from the RAM-resident vocab matrix + GEMV.

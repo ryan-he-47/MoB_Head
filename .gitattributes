@@ -1,0 +1,12 @@
+# Stable source line endings across the local Windows workspace and Linux HPC.
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.sbatch text eol=lf
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.cff text eol=lf
+LICENSE text eol=lf

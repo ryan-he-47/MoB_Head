@@ -1,4 +1,4 @@
-# p2 dual-arm distillation (user idea 2026-09-05): two param-matched MoB heads
+
 # (wide 4096x3 vs deep 3072x5, ~51M each) trained SIDE BY SIDE on ONE frozen
 # Llama backbone. Distillation's expensive part — the frozen backbone forward
 # (h + teacher top-k) — is shared, so two arms cost ~1.2x of one; and both
@@ -24,17 +24,17 @@ ARM_SETS = {
         "wide": {"type": "mob", "width": 4096, "depth": 3},
         "deep": {"type": "mob", "width": 3072, "depth": 5},
     },
-    # probe set for 'is shallower actually better? — even linear?' (docs/16 Q2,
-    # user question 2026-09-06): single-hidden-layer vs bare linear.
+    # probe set for 'is shallower actually better? — even linear?' (docs/01-method.md,
+
     # shallow1l width = 3072 (same as the original head, depth 1 vs 3 — isolates
     # depth alone; hidden width must exceed the 2304-dim output or it becomes a
-    # rank bottleneck of its own — user catch 2026-09-06)
+    # rank bottleneck of its own —)
     "shallow": {
         "shallow1l": {"type": "mob", "width": 3072, "depth": 1},
         "linear": {"type": "linear"},
     },
-    # three-head race on SmolLM2 (docs/16 §5, user design 2026-09-07; COSINE per
-    # user ruling 2026-09-09 — fixed-budget runs get a full-length decay tail,
+    # three-head race on SmolLM2 (docs/01-method.md; COSINE per
+    # — fixed-budget runs get a full-length decay tail,
     # no constant-LR plateau). Per-arm peaks from the local LR-comfort scan
     # (p7_lr_scan.py); swiglu peak is the fixed-head re-probe's output (override
     # with --peaks swiglu=... without touching code).
@@ -48,7 +48,7 @@ ARM_SETS = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--model-dir", default=None)
     ap.add_argument("--outdir", default="runs/p2_headscale_dual")
     ap.add_argument("--token-cache", default="fineweb_train_tokens.npy")

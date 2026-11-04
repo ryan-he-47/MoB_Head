@@ -1,0 +1,62 @@
+[
+  {
+    "repo_id": "ryan1145/mob-qwen3.5-2b-swiglu",
+    "url": "https://huggingface.co/ryan1145/mob-qwen3.5-2b-swiglu",
+    "revision": "b470d0e85102b92e0176cc2ce094cf18bdaa4af4",
+    "verified_files": [
+      "BASE_MODEL_LICENSE",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "artifact_manifest.json",
+      "codebook.npz",
+      "config.json",
+      "model.safetensors"
+    ]
+  },
+  {
+    "repo_id": "ryan1145/mob-smollm2-1.7b-swiglu",
+    "url": "https://huggingface.co/ryan1145/mob-smollm2-1.7b-swiglu",
+    "revision": "3dc6cf00bb98714b05b9f5b0c7cc03c0aba55574",
+    "verified_files": [
+      "BASE_MODEL_LICENSE",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "artifact_manifest.json",
+      "codebook.npz",
+      "config.json",
+      "model.safetensors"
+    ]
+  },
+  {
+    "repo_id": "ryan1145/mob-smollm2-1.7b-resmlp",
+    "url": "https://huggingface.co/ryan1145/mob-smollm2-1.7b-resmlp",
+    "revision": "61953e5c379df737ad7bc80d1896428374ceb8a7",
+    "verified_files": [
+      "BASE_MODEL_LICENSE",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "artifact_manifest.json",
+      "codebook.npz",
+      "config.json",
+      "model.safetensors"
+    ]
+  },
+  {
+    "repo_id": "ryan1145/mob-smollm2-1.7b-mlp",
+    "url": "https://huggingface.co/ryan1145/mob-smollm2-1.7b-mlp",
+    "revision": "d21486e9df57de8c7786cab788ceee1ccc94f308",
+    "verified_files": [
+      "BASE_MODEL_LICENSE",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "artifact_manifest.json",
+      "codebook.npz",
+      "config.json",
+      "model.safetensors"
+    ]
+  }
+]

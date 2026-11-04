@@ -10,7 +10,7 @@ import os
 import sys
 import time
 
-ROOT = "/gpfs1/scratch/yihe47/qwen35"
+ROOT = os.path.join(os.environ.get("MOB_SCRATCH", "."), "")
 DATA = os.path.join(ROOT, "data")
 MODELS = os.path.join(ROOT, "models")
 

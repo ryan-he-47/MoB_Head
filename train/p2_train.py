@@ -95,7 +95,7 @@ def kmeans_vertex_init(codes_gpu, tids, tps, init_c, k, n_samp=20000, seed=42):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
+    ap.add_argument("--data-root", default=r".")
     ap.add_argument("--model-dir", default=None,
                     help="default: <data-root>/LLM-Research--Llama-3.2-1B/snapshots/master")
     ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
@@ -152,7 +152,7 @@ def main():
     ap.add_argument("--ecc-bits", type=int, default=0,
                     help=">0: online ECC extension — append this many parity bits to every "
                          "code (deterministic XOR of data bits; INFRASTRUCTURE, experiments "
-                         "frozen per user 2026-09-06)")
+                         "disabled by default)")
     ap.add_argument("--resume", default=None)
     args = ap.parse_args()
     torch.manual_seed(args.seed)
@@ -370,7 +370,7 @@ def main():
                 torch.save({
                     "head": head.state_dict(),
                     "opt": opt.state_dict(),
-                    "step": step + 1,  # next step index to run on resume
+                    "step": step + 1,  # resume starts at this update index
                     "epoch": epoch,
                     "order": torch.from_numpy(np.asarray(order)),
                 }, os.path.join(args.outdir, f"head_step{step + 1}.pt"))

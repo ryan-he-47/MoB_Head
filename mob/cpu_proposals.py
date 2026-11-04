@@ -1,6 +1,6 @@
 """CPU-native (numba JIT) implementations of the MoB flip proposals.
 
-User task 2026-09-19: the python-loop proposals (roundflip/scoreflip) are
+The Python-loop proposals (roundflip/scoreflip) are
 launch-overhead-bound on CPU; numba nopython gives C-class speed with zero
 compiler toolchain (llvmlite wheel) — the pragmatic equivalent of a C++ port
 for this box (no MSVC).
@@ -8,7 +8,7 @@ for this box (no MSVC).
 Semantics are EXACTLY mob_common.propose_scoreflip / propose_roundflip:
   scoreflip: pi-mass(0.99) component scope; per component emit the flip
   lattice of the uncertain bits (|p-0.5| <= alpha, u <= u_max) in DESCENDING
-  SUM-OF-FLIPPED-BIT-VARIANCES order (user spec 2026-09-19; NOTE: this equals
+  SUM-OF-FLIPPED-BIT-VARIANCES order (this equals
   the exact per-component likelihood order only within a fixed Hamming
   weight — the true logp cost is sum|z|; kept as specced for parity, with
   sum|z| available as a one-line upgrade);

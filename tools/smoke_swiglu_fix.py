@@ -1,7 +1,6 @@
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import torch
-sys.path.insert(0, "scripts")
 from mob.mob_common import SwiGLUHead, ResMLPHead, MoBHead
 
 for name, head in [("swiglu1-fixed", SwiGLUHead(k=128, hidden=7300, m=17)),

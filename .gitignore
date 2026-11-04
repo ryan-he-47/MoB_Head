@@ -1,15 +1,18 @@
 # big binary artifacts (external or regenerable; do NOT commit)
+/local_archive/
+/dist/
+/working files/
 
-# Llama-3.2-1B weights (Llama 3.2 license; fetch per docs/06)
+# Llama-3.2-1B weights (Llama 3.2 license; fetch per docs/05-reproduction.md)
 LLM-Research--Llama-3.2-1B/
 
-# BabyLM 2023 raw text (download per docs/06)
+# BabyLM 2023 raw text (download per docs/05-reproduction.md)
 data/babylm_data/
 
 # token caches (rebuilt by scripts)
 data/*_tokens.npy
 
-# raw data archive (240MB; download per docs/06)
+# raw data archive (240MB; download per docs/05-reproduction.md)
 data/babylm_data.zip
 
 # macOS archive junk
@@ -20,9 +23,10 @@ runs/
 logs/
 *.log
 
-# tooling / agent state
+# local tooling caches
 .omo/
 .codegraph/
+.codex/
 _lsp_check.py
 __pycache__/
 *.pyc

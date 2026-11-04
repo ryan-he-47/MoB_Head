@@ -1,0 +1,65 @@
+{
+  "V": 49152,
+  "h": 2048,
+  "head_params_M": {
+    "control": 31.9,
+    "resmlp": 50.8,
+    "swiglu": 49.3
+  },
+  "analytic_per_step": {
+    "native": {
+      "params": 100663296,
+      "bytes_fp16": 201.33,
+      "bytes_fp32": 402.65,
+      "flops": 201.33
+    },
+    "control": {
+      "params": 31861888,
+      "bytes_fp16": 63.72,
+      "bytes_fp32": 127.45,
+      "flops": 63.72
+    },
+    "resmlp": {
+      "params": 50757760,
+      "bytes_fp16": 101.52,
+      "bytes_fp32": 203.03,
+      "flops": 101.52
+    },
+    "swiglu": {
+      "params": 49313920,
+      "bytes_fp16": 98.63,
+      "bytes_fp32": 197.26,
+      "flops": 98.63
+    }
+  },
+  "head_latency": {
+    "native_gpu_b1_ms": 0.801,
+    "native_gpu_b256_ms": 1.805,
+    "control_gpu_b1_ms": 0.454,
+    "control_gpu_b256_ms": 1.819,
+    "resmlp_gpu_b1_ms": 1.387,
+    "resmlp_gpu_b256_ms": 3.317,
+    "swiglu_gpu_b1_ms": 0.847,
+    "swiglu_gpu_b256_ms": 3.421,
+    "native_cpu_b1_ms": 18.612,
+    "control_cpu_b1_ms": 6.197,
+    "resmlp_cpu_b1_ms": 10.188,
+    "swiglu_cpu_b1_ms": 8.523
+  },
+  "decode_step_gpu": {
+    "round_gpu_ms": 0.25,
+    "mixture_topk32_gpu_ms": 2.179,
+    "roundflip_gpu_ms": 17.402,
+    "rerank_roundflip_gpu_ms": 18.093
+  },
+  "e2e_tok_per_s": {
+    "native_b1_tokps": 27.6,
+    "mob_round_b1_tokps": 26.3,
+    "mob_rerank_roundflip_b1_tokps": 17.8,
+    "native_b32_tokps": 897.0,
+    "mob_round_b32_tokps": 859.8,
+    "mob_rerank_roundflip_b32_tokps": 58.7,
+    "native_b128_tokps": 3467.3,
+    "mob_round_b128_tokps": 3335.8
+  }
+}

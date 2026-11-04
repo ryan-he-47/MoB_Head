@@ -7,9 +7,9 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_DIR = r"E:\Trash_things\llm_codec\LLM-Research--Llama-3.2-1B\snapshots\master"
-DATA_DIR = r"E:\Trash_things\llm_codec\data\babylm_data\babylm_10M"
-CODEBOOK = r"E:\Trash_things\llm_codec\data\codebook.npz"
+MODEL_DIR = r".\LLM-Research--Llama-3.2-1B\snapshots\master"
+DATA_DIR = r".\data\babylm_data\babylm_10M"
+CODEBOOK = r".\data\codebook.npz"
 LINES_PER_FILE = 1000
 SEQ_LEN = 512
 N_CHUNKS = 24

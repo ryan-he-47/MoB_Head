@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RUNS = r"E:\Trash_things\llm_codec\runs"
+RUNS = r".\runs"
 
 
 def load(path):
@@ -85,6 +85,6 @@ ax[1].set_title("dev NLL panels")
 ax[1].set_xlabel("step (k)"); ax[1].legend(); ax[1].grid(alpha=0.3)
 fig.suptitle("P5 from-scratch twins (212M, fp32, FineWeb) — mid-run")
 fig.tight_layout()
-out = r"E:\Trash_things\llm_codec\docs\p5_twin_curves.png"
+out = r".\docs\p5_twin_curves.png"
 fig.savefig(out, dpi=150)
 print("\nsaved", out)

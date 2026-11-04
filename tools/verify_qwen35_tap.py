@@ -1,3 +1,5 @@
+
+import os
 # Qwen3.5-2B tap-point verification (BEFORE codebook/distillation, 2026-09-14):
 # the new arch is a multimodal wrapper (Qwen3_5ForConditionalGeneration) with
 # hybrid Gated DeltaNet/Attention + MTP. Must confirm:
@@ -12,7 +14,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-MODEL_DIR = sys.argv[1] if len(sys.argv) > 1 else "/gpfs1/scratch/yihe47/qwen35/models/Qwen3.5-2B"
+MODEL_DIR = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.environ.get("MOB_SCRATCH", "."), "models/Qwen3.5-2B")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 tok = AutoTokenizer.from_pretrained(MODEL_DIR)

@@ -1,5 +1,5 @@
-# P8: evaluate the adaptive candidate-generation strategy (user design
-# 2026-09-07, docs/09 section 6.2): dynamic component scope (ratio/mass) +
+# P8: evaluate the adaptive candidate-generation strategy (
+# 2026-09-07, docs/01-method.md): dynamic component scope (ratio/mass) +
 # per-component uncertain-bit enumeration, vs the round-32 baseline, on a
 # 2048-position dev subset. Reports recall vs native top-1, hit@top4/8,
 # rerank agreement, and candidate-count stats (the Pareto cost axis).
@@ -25,8 +25,8 @@ GRID = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-root", default=r"E:\Trash_things\llm_codec")
-    ap.add_argument("--head", default=r"E:\Trash_things\llm_codec\runs\head_final_wsd.pt")
+    ap.add_argument("--data-root", default=r".")
+    ap.add_argument("--head", default=r".\runs\head_final_wsd.pt")
     ap.add_argument("--k", type=int, default=128)
     ap.add_argument("--width", type=int, default=3072)
     ap.add_argument("--head-type", choices=["mob", "resmlp", "swiglu"], default="mob")
@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--codebook", default="codebook.npz")
     ap.add_argument("--dev-cache", default="fineweb_dev_tokens.npy")
     ap.add_argument("--n-pos", type=int, default=2048)
-    ap.add_argument("--out", default=r"E:\Trash_things\llm_codec\runs\p8_adaptive_eval.json")
+    ap.add_argument("--out", default=r".\runs\p8_adaptive_eval.json")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
